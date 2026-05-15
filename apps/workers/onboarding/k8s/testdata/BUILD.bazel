@@ -1,0 +1,4 @@
+exports_files(
+    ["smoke.sh"],
+    visibility = ["//apps/workers/onboarding/k8s:__pkg__"],
+)

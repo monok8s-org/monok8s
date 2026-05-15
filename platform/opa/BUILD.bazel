@@ -1,0 +1,12 @@
+"""OPA Gatekeeper bootstrap + require-tenant-label constraint shape smoke (#17)."""
+
+sh_test(
+    name = "gatekeeper_smoke",
+    srcs = ["//platform/opa/testdata:smoke.sh"],
+    data = [
+        "bootstrap.yaml",
+        "constraints/require-tenant-label-constraint.yaml",
+        "constraints/require-tenant-label-template.yaml",
+    ],
+    tags = ["pure"],
+)

@@ -1,0 +1,8 @@
+"""tempo bootstrap shape smoke (#25)."""
+
+sh_test(
+    name = "tempo_smoke",
+    srcs = ["//platform/tempo/testdata:smoke.sh"],
+    data = ["bootstrap.yaml"],
+    tags = ["pure"],
+)

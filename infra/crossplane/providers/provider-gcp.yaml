@@ -1,0 +1,17 @@
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-gcp
+spec:
+  package: xpkg.upbound.io/upbound/provider-gcp:v0.41.0
+  controllerConfigRef:
+    name: provider-gcp-config
+---
+apiVersion: pkg.crossplane.io/v1alpha1
+kind: ControllerConfig
+metadata:
+  name: provider-gcp-config
+spec:
+  serviceAccountName: crossplane   # uses Workload Identity binding from Terraform
+  args:
+    - --debug

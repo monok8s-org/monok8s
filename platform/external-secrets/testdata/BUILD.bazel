@@ -1,0 +1,4 @@
+exports_files(
+    ["smoke.sh"],
+    visibility = ["//platform/external-secrets:__pkg__"],
+)

@@ -1,0 +1,144 @@
+"""L4 rules_kind end-to-end test for monok8s-bootstrap (#145 / #98b).
+
+First codebase use of rules_kind. Spins a fresh kind cluster, applies
+the full platform install manifest set in dependency order, loads the
+bootstrap + onboarding worker images as tarballs (via the `oci_load`
+targets emitted by app_image() per #157), and runs a Go test driver
+that:
+
+  1. Waits for platform Deployments (Crossplane, Zitadel, SpiceDB,
+     Temporal, Argo Workflows, onboarding worker).
+  2. Creates the install-time `monok8s-bootstrap-admin` Secret.
+  3. Applies the bootstrap Job manifest.
+  4. Waits for the Job's Pod to exit 0.
+  5. Asserts XTenant `system` `.status.ready=true`.
+  6. Asserts a Zitadel admin user exists (REST search).
+  7. Asserts the SpiceDB system:monok8s#only_system_can_create_tenants
+     relation for the admin user (CheckPermission via
+     packages/auth/go::CanOnSystem).
+
+Tags = ["manual", "no-sandbox", "requires-docker"]. Excluded from
+`bazel test //...` wildcard. Run on-demand: `bazel test
+//platform/monok8s-bootstrap/k8s_e2e:k8s_e2e` (~5-10 min on a host
+with DOCKER_HOST pointed at a working docker / podman socket).
+"""
+
+load("@rules_go//go:def.bzl", "go_test")
+load("@rules_itest//:itest.bzl", "itest_service", "service_test")
+load("@rules_kind//:defs.bzl", "kind_cluster", "kind_health_check")
+
+# Fresh kind 1.29 cluster pre-populated with the install manifest set.
+# Manifests apply in listed order; kubectl-apply does not wait for
+# CRD/operator readiness between entries — the test driver compensates
+# in Phase 1 by polling Deployments.
+kind_cluster(
+    name = "cluster",
+    k8s_version = "1.29",
+    images = [
+        # Tarballs loaded into kind via `kind load image-archive`.
+        # Matched by `harbor.monok8s.internal/monok8s/<name>:latest`
+        # repo_tags from app_image's oci_load (per PR #158).
+        "//apps/workers/onboarding:image_tarball",
+        "//apps/workers/bootstrap:image_tarball",
+    ],
+    manifests = [
+        # Wave 0 — Crossplane meta-controller. Installs its own CRDs at
+        # startup once the Deployment is up (per platform/crossplane/VENDOR.md).
+        "//platform/crossplane:bootstrap.yaml",
+        # Wave 1 — cert-manager + operators.
+        "//platform/cert-manager:bootstrap.yaml",
+        "//platform/capsule:bootstrap.yaml",
+        "//platform/cloudnativepg:bootstrap.yaml",
+        "//platform/argo-workflows:bootstrap.yaml",
+        "//platform/nats:bootstrap.yaml",
+        "//platform/temporal:operator-bootstrap.yaml",
+        "//platform/zitadel:bootstrap.yaml",
+        "//platform/spicedb:operator-bootstrap.yaml",
+        # Wave 2 — cluster CRs (databases + cluster custom resources).
+        "//platform/cloudnativepg:clusters-temporal.yaml",
+        "//platform/cloudnativepg:clusters-spicedb.yaml",
+        "//platform/temporal:cluster.yaml",
+        "//platform/temporal:temporalcluster.yaml",
+        "//platform/zitadel:cluster.yaml",
+        "//platform/spicedb:cluster.yaml",
+        "//platform/spicedb:spicedbcluster.yaml",
+        # Wave 3 — XRDs + tenant Compositions (only those that work
+        # in kind; tenant-{gcp,aws,azure} need cloud creds and are
+        # skipped).
+        "//infra/crossplane/xrds:xtenant.yaml",
+        "//infra/crossplane/xrds:xtenant-database.yaml",
+        "//infra/crossplane/compositions/tenant-namespace:composition.yaml",
+        "//infra/crossplane/compositions/tenant-capsule:composition.yaml",
+        "//infra/crossplane/compositions/tenant-database-cnpg:composition.yaml",
+        # Wave 4 — WorkflowTemplates + onboarding worker Deployment.
+        "//platform/argo-workflows:templates/apply-tenant-migrations.yaml",
+        "//platform/argo-workflows:templates/mint-tenant-vault-key.yaml",
+        "//apps/workers/onboarding/k8s/base:deployment.yaml",
+        "//apps/workers/onboarding/k8s/base:rbac.yaml",
+        # Wave 5 — bootstrap RBAC (Job is applied by the test driver
+        # AFTER the install-time admin Secret is created).
+        "//platform/monok8s-bootstrap:rbac.yaml",
+    ],
+    tags = [
+        "manual",
+        "no-sandbox",
+        "requires-docker",
+    ],
+)
+
+kind_health_check(
+    name = "cluster_health",
+    cluster = ":cluster",
+)
+
+itest_service(
+    name = "cluster_svc",
+    exe = ":cluster",
+    health_check = ":cluster_health",
+    tags = [
+        "manual",
+        "no-sandbox",
+        "requires-docker",
+    ],
+)
+
+go_test(
+    name = "e2e_test_bin",
+    srcs = ["e2e_test.go"],
+    data = [
+        "//platform/monok8s-bootstrap:bootstrap-job.yaml",
+    ],
+    tags = [
+        "impure",
+        "manual",
+        "no-sandbox",
+        "requires-docker",
+    ],
+    deps = [
+        "//packages/auth",
+        "@com_github_stretchr_testify//require",
+        "@rules_go//go/runfiles",
+        "@io_k8s_api//batch/v1:batch",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1/unstructured",
+        "@io_k8s_apimachinery//pkg/runtime/schema",
+        "@io_k8s_apimachinery//pkg/util/yaml",
+        "@io_k8s_client_go//dynamic",
+        "@io_k8s_client_go//kubernetes",
+        "@io_k8s_client_go//tools/clientcmd",
+    ],
+)
+
+service_test(
+    name = "k8s_e2e",
+    services = [":cluster_svc"],
+    tags = [
+        "impure",
+        "manual",
+        "no-sandbox",
+        "requires-docker",
+    ],
+    test = ":e2e_test_bin",
+)

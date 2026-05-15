@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "forge-manager": {
+      "command": "/home/collider/.local/bin/forge-manager-mcp",
+      "args": ["--project-dir", "."],
+      "env": {
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}"
+      }
+    }
+  }
+}

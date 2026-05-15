@@ -1,0 +1,29 @@
+"""packages/observability — OTel SDK init for Node services (#35).
+
+Sub-claim of #35 — full L1 / real-OTLP-collector ACs remain on the parent
+Issue. This BUILD landed as part of the bootstrap-split that unblocks #79.
+"""
+
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config", "ts_project")
+
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    deps = ["//:tsconfig"],
+)
+
+ts_project(
+    name = "lib",
+    srcs = glob(["src/**/*.ts"]),
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//:node_modules/@opentelemetry/exporter-metrics-otlp-grpc",
+        "//:node_modules/@opentelemetry/exporter-trace-otlp-grpc",
+        "//:node_modules/@opentelemetry/sdk-node",
+        "//:node_modules/@types/node",
+    ],
+)

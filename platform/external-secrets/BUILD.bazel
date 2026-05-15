@@ -1,0 +1,11 @@
+"""ESO bootstrap + vault-backend ClusterSecretStore shape smoke (#18)."""
+
+sh_test(
+    name = "external_secrets_smoke",
+    srcs = ["//platform/external-secrets/testdata:smoke.sh"],
+    data = [
+        "bootstrap.yaml",
+        "cluster-secret-store.yaml",
+    ],
+    tags = ["pure"],
+)

@@ -1,0 +1,56 @@
+# Temporal Helm values override.
+# Archival is the single most important operational configuration —
+# without it the history table grows unboundedly in Postgres.
+
+server:
+  config:
+    namespaces:
+      - name: monok8s
+        retention: 30d              # keep in Postgres for 30 days, then archive
+
+# ── Archival ──────────────────────────────────────────────────────────────────
+# Offloads workflow history to S3 after retention period.
+# Eliminates the unbounded table growth problem without data loss.
+# Simplification: once archival is on, the Temporal Postgres instance stays
+# small indefinitely — no manual cleanup or partitioning needed.
+
+archival:
+  history:
+    state: enabled
+    enableRead: true
+    provider:
+      s3:
+        bucket: monok8s-temporal-archive
+        region: us-east-1
+        logAllRequests: false
+  visibility:
+    state: enabled
+    enableRead: true
+    provider:
+      s3:
+        bucket: monok8s-temporal-archive
+        region: us-east-1
+
+# ── Database ──────────────────────────────────────────────────────────────────
+# Points at the CloudNativePG-managed cluster pooler.
+# Simplification: all DB connection strings come from Vault via ESO —
+# no credentials in this file.
+
+persistence:
+  default:
+    driver: sql
+    sql:
+      driver: postgres12
+      host: monok8s-temporal-rw.monok8s-platform.svc.cluster.local
+      port: 5432
+      database: temporal
+      existingSecret: temporal-db-credentials   # Vault → ESO
+
+  visibility:
+    driver: sql
+    sql:
+      driver: postgres12
+      host: monok8s-temporal-rw.monok8s-platform.svc.cluster.local
+      port: 5432
+      database: temporal_visibility
+      existingSecret: temporal-db-credentials

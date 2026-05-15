@@ -1,0 +1,7 @@
+exports_files(
+    [
+        "smoke.sh",
+        "valid-xtenant-gcp.yaml",
+    ],
+    visibility = ["//infra/crossplane/compositions/tenant-gcp:__pkg__"],
+)

@@ -1,0 +1,11 @@
+# Test fixtures: relationships exercising every relation in schema.zed.
+# Loaded by the L2 spicedb_test (//platform/spicedb:permissions_test).
+# Lines starting with `#` and blank lines are ignored.
+
+# tenant:acme — alice owns it (write), bob reads, carol is just a member.
+tenant:acme#write@user:alice
+tenant:acme#read@user:bob
+tenant:acme#member@user:carol
+
+# tenant:beta — only dave belongs.
+tenant:beta#member@user:dave

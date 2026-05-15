@@ -1,0 +1,275 @@
+/**
+ * monok8s SpiceDB schema
+ *
+ * Resources:  platform, tenant, group, user, service_account
+ * Principals: user, service_account
+ *
+ * Singleton:  platform:monok8s  — written once at bootstrap, never changed
+ */
+
+
+// ── Caveats ───────────────────────────────────────────────────────────────────
+//
+// Caveats attach conditions to individual relationships. They are evaluated
+// at check-time when the caller supplies a matching context value.
+//
+// Usage pattern:
+//   Write:  tenant:T#member@user:U[expiry{"expiry_time":"2026-04-18T00:00:00Z"}]
+//   Check:  pass {now: <current RFC3339 timestamp>} as caveat context
+
+// Time-bounded access — for temporary grants / JIT elevation.
+// Relationship is written with the expiry_time baked in.
+// Pass {now: <current_time_rfc3339>} at check time.
+// Temporal workflow deletes the relation when the timer fires (belt-and-suspenders).
+caveat expiry(expiry_time timestamp, now timestamp) {
+    now < expiry_time
+}
+
+// IP allowlist — restrict a role to known egress IPs (CI/CD runners, offices).
+// Pass {client_ip: <request_ip>} at check time.
+// Uses exact IP match — for CIDR support upgrade to SpiceDB >=1.30 with
+// the ip_range() CEL extension.
+caveat ip_allowlist(client_ip string, allowed_ips list<string>) {
+    client_ip in allowed_ips
+}
+
+
+// ── Platform ──────────────────────────────────────────────────────────────────
+
+definition platform {
+    relation super_admin: user
+
+    permission administrate = super_admin
+}
+
+
+// ── System (admin tenant) ────────────────────────────────────────────────────
+// system:monok8s — singleton resource gating the create-tenant operation.
+// Seeded by the install-time bootstrap Job (#98a) with the first admin user.
+// Thereafter `system` is closed: only members of
+// only_system_can_create_tenants can create new tenants via the API.
+//
+// Distinct from platform:monok8s — platform.administrate is the read/overrride
+// surface for support staff; system.create_tenants is the write/create surface
+// for tenant provisioning.
+//
+// Relations written at install time (by apps/workers/bootstrap):
+//   system:monok8s#only_system_can_create_tenants@user:<bootstrapAdminID>
+
+definition system {
+    relation only_system_can_create_tenants: user
+
+    permission create_tenants = only_system_can_create_tenants
+}
+
+
+// ── Group ─────────────────────────────────────────────────────────────────────
+// Groups are tenant-scoped collections of users.
+// A group can hold a tenant role, granting all its members that role transitively.
+// Groups can be nested: a group's members can include another group's members.
+//
+// Relations written on group creation:
+//   group:G#tenant@tenant:T
+//
+// Relations written when user joins group:
+//   group:G#member@user:X
+//
+// Relations written when group is assigned a tenant role:
+//   tenant:T#<role>@group:G#membership
+//
+// Relations written when group manages another group:
+//   group:G2#manager@group:G1#membership
+
+definition group {
+    // Groups are scoped to a single tenant
+    relation tenant: tenant
+
+    // Direct members — users or members of nested groups
+    relation member: user | group#membership
+
+    // Who can add/remove members from this group
+    // Defaults to tenant manage_members if no explicit manager set
+    relation manager: user | group#membership
+
+    // Computed membership — direct + nested group members
+    permission membership = member
+
+    // Who can manage group membership
+    permission manage =
+        manager +
+        tenant->manage_members
+}
+
+
+// ── Tenant ────────────────────────────────────────────────────────────────────
+// Role relations accept users, group members, or service accounts.
+//
+// Roles are non-exclusive — a principal can hold multiple roles.
+// Suspended principals lose all permissions regardless of role(s).
+// Denied principals are hard-blocked — overrides all roles, including suspension.
+//   Use denied for: security incidents, GDPR investigation holds, chargebacks.
+//   Use suspended for: routine admin action (member gone quiet, billing lapse).
+//   Platform admin always retains access through denied (can investigate/remediate).
+//
+// owner is user-only: only individuals can own a tenant, never groups or SAs.
+
+definition tenant {
+    relation platform: platform
+
+    // Role relations: user / group members / service accounts
+    relation owner:           user
+    relation admin:           user | user with expiry | group#membership | service_account | service_account with ip_allowlist | service_account with expiry
+    relation member:          user | group#membership | service_account
+    relation viewer:          user | group#membership | service_account
+    relation billing_manager: user | group#membership | service_account
+
+    // Suspended applies to individual users and service accounts — not groups.
+    // Routine access revocation (tenant admin action).
+    relation suspended: user | service_account
+
+    // Denied is a hard block — overrides roles and suspended.
+    // Security incidents, legal holds, fraud flags.
+    // Platform admin bypasses denied to retain investigative access.
+    relation denied: user | service_account
+
+    // ── Intermediate ────────────────────────────────────────────────────────
+
+    permission any_role = owner + admin + member + viewer + billing_manager
+
+    // Active = holds a role AND is not suspended AND is not denied
+    permission active = any_role - suspended - denied
+
+    // ── Permissions ──────────────────────────────────────────────────────────
+
+    permission read =
+        active +
+        platform->administrate
+
+    permission write =
+        ((owner + admin + member) - suspended - denied) +
+        platform->administrate
+
+    // Invite members, change roles, create/manage groups, suspend, remove
+    permission manage_members =
+        ((owner + admin) - suspended - denied) +
+        platform->administrate
+
+    permission manage_billing =
+        ((owner + admin + billing_manager) - suspended - denied) +
+        platform->administrate
+
+    permission manage_settings =
+        ((owner + admin) - suspended - denied) +
+        platform->administrate
+
+    // Delete the tenant — owner only (suspended or denied owner loses this)
+    permission delete =
+        (owner - suspended - denied) +
+        platform->administrate
+
+    // Transfer ownership — suspended or denied owner cannot transfer
+    permission transfer_ownership = owner - suspended - denied
+}
+
+
+// ── Service Account ───────────────────────────────────────────────────────────
+// Non-human principals — CI/CD runners, integrations, internal workers.
+// Authenticate via API key (hashed in DB), not Zitadel JWT.
+// Can hold any tenant role except owner.
+// Suspended via tenant#suspended relation (same mechanic as users).
+//
+// Relations written on creation:
+//   service_account:SA#tenant@tenant:T
+//   service_account:SA#self@service_account:SA
+//
+// Relations written when SA is granted a tenant role:
+//   tenant:T#<role>@service_account:SA
+//
+// To suspend an SA: write tenant:T#suspended@service_account:SA
+// (same as suspending a user — no separate SA suspension relation needed)
+
+definition service_account {
+    relation tenant: tenant
+
+    // Self-reference — used to verify the SA exists when checking SA permissions
+    relation self: service_account
+
+    permission active = self
+}
+
+
+// ── User ──────────────────────────────────────────────────────────────────────
+// Permissions here are for operations ON a user.
+//
+// managing_tenant is REMOVED. User-on-user operations (suspend, read_profile)
+// require tenant context at the API layer — the JWT always carries tenantId,
+// so the check is two explicit canOnTenant() calls:
+//
+//   canOnTenant(actorId, "manage_members", tenantId)  — actor has permission
+//   canOnTenant(targetId, "read",          tenantId)  — target is in same tenant
+//
+// This removes a fragile back-reference that had to be maintained for every
+// group membership change, and is replaced by two calls that handle groups
+// naturally through the tenant resource.
+//
+// Relations written at user registration — once, never changed:
+//   user:X#self@user:X
+//   user:X#platform@platform:monok8s
+
+// ── Installation ──────────────────────────────────────────────────────────────
+// Represents a self-hosted Model B deployment belonging to a tenant.
+// Platform admin can view and revoke any installation.
+// Tenant manage_settings actors can manage their own installations.
+//
+// Relations written at registration:
+//   installation:I#tenant@tenant:T
+//   installation:I#platform@platform:monok8s
+
+definition installation {
+    relation tenant: tenant
+    relation platform: platform
+
+    // Send telemetry, post heartbeats, push alerts
+    permission report  = tenant->manage_settings + platform->administrate
+
+    // Read installation status and telemetry in Model A
+    permission view    = tenant->read            + platform->administrate
+
+    // Revoke or rotate credentials
+    permission revoke  = tenant->manage_settings + platform->administrate
+}
+
+
+// ── User ──────────────────────────────────────────────────────────────────────
+// Permissions here are for operations ON a user.
+//
+// managing_tenant is REMOVED. User-on-user operations (suspend, read_profile)
+// require tenant context at the API layer — the JWT always carries tenantId,
+// so the check is two explicit canOnTenant() calls:
+//
+//   canOnTenant(actorId, "manage_members", tenantId)  — actor has permission
+//   canOnTenant(targetId, "read",          tenantId)  — target is in same tenant
+//
+// This removes a fragile back-reference that had to be maintained for every
+// group membership change, and is replaced by two calls that handle groups
+// naturally through the tenant resource.
+//
+// Relations written at user registration — once, never changed:
+//   user:X#self@user:X
+//   user:X#platform@platform:monok8s
+
+definition user {
+    relation self: user
+    relation platform: platform
+
+    // Update own profile (name, avatar) — self only, not delegatable
+    permission update_profile = self
+
+    // Request GDPR erasure
+    permission request_erasure =
+        self +
+        platform->administrate
+
+    // Hard delete — platform admin only
+    permission delete = platform->administrate
+}

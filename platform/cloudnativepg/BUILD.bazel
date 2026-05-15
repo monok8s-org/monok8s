@@ -1,0 +1,17 @@
+"""CloudNativePG operator bootstrap shape smoke (#23 dep)."""
+
+exports_files(
+    [
+        "bootstrap.yaml",
+        "clusters-spicedb.yaml",
+        "clusters-temporal.yaml",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "cloudnativepg_smoke",
+    srcs = ["//platform/cloudnativepg/testdata:smoke.sh"],
+    data = ["bootstrap.yaml"],
+    tags = ["pure"],
+)

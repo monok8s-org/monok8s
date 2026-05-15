@@ -1,0 +1,43 @@
+"""L2 hermetic envtest for the XTenant XRD (#13)."""
+
+load("@rules_kubernetes//:defs.bzl", "kubernetes_manifest", "kubernetes_server")
+load("//tools/bazel:itest.bzl", "itest_suite")
+
+# Manifests applied to the envtest cluster on bring-up. Order matters:
+# the meta-CRD (CompositeResourceDefinition) must be installed before
+# Kubernetes will accept the XTenant XRD.
+kubernetes_manifest(
+    name = "xtenant_envtest_manifests",
+    srcs = [
+        # 1. Crossplane core CRDs — defines `kind: CompositeResourceDefinition`
+        #    so the apiserver can validate our XRD's shape. Vendored per
+        #    Hermeticity Discussion #4 Gap 3.
+        "//infra/crossplane/vendor:apiextensions.crossplane.io_compositeresourcedefinitions.yaml",
+        # 2. The XRD itself.
+        "//infra/crossplane/xrds:xtenant.yaml",
+    ],
+)
+
+kubernetes_server(
+    name = "xtenant_envtest_k8s",
+    manifests = ":xtenant_envtest_manifests",
+)
+
+sh_binary(
+    name = "xtenant_smoke_bin",
+    srcs = ["//infra/crossplane/xrds/testdata:smoke.sh"],
+    data = ["//infra/crossplane/xrds/testdata:valid-xtenant.yaml"],
+    tags = ["manual"],
+)
+
+# L2 envtest target: brings up kube-apiserver+etcd, applies the meta-CRD
+# + XTenant XRD via kubernetes_server's `manifests` attr, then runs the
+# smoke that asserts the XRD landed and the fixture has the right shape.
+# Full XRD-controller-driven fixture validation is L4 territory (#37).
+itest_suite(
+    name = "xtenant_envtest",
+    servers = {
+        "k8s": ":xtenant_envtest_k8s",
+    },
+    test = ":xtenant_smoke_bin",
+)

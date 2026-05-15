@@ -1,0 +1,39 @@
+# oci-push — pushes a Bazel-built OCI image tarball to a registry.
+# Wraps `crane push` for hermeticity (no docker daemon needed in the
+# Task). The image-target param identifies the bazel-bin location of
+# the tarball; the registry param picks the destination.
+#
+# Generic per AC#3. apps/CLAUDE.md pins the registry to
+# harbor.monok8s.internal/monok8s/<service-name>; consumers pass the
+# full destination ref including the tag derived from the build step's
+# image-tag result.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: oci-push
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: image-tarball
+      type: string
+      description: Path to the Bazel-built OCI tarball relative to source workspace (e.g. bazel-bin/apps/api/image_tarball.tar).
+    - name: destination
+      type: string
+      description: Full destination ref including registry, repo, and tag.
+  workspaces:
+    - name: source
+      description: Repo workspace containing the bazel-bin tarball.
+  results:
+    - name: pushed-digest
+      description: sha256 digest of the pushed image as resolved by the registry.
+  steps:
+    - name: push
+      image: gcr.io/go-containerregistry/crane:v0.20.2
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/usr/bin/env sh
+        set -eu
+        crane push "$(params.image-tarball)" "$(params.destination)"
+        # Capture the digest crane resolves — for downstream gitops-update.
+        digest=$(crane digest "$(params.destination)")
+        printf '%s' "$digest" | tee "$(results.pushed-digest.path)"

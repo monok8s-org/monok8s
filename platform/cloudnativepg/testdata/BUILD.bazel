@@ -1,0 +1,1 @@
+exports_files(["smoke.sh"], visibility = ["//platform/cloudnativepg:__pkg__"])

@@ -1,0 +1,89 @@
+---
+# Simplification note: CloudNativePG's enablePodMonitor scrapes the standard
+# pg_stat_* metrics automatically. This exporter adds the custom queries that
+# are specific to monok8s (bloat ratios, table sizes, connection state breakdown).
+# If CloudNativePG's built-in metrics cover a query here in future, remove the
+# duplicate from custom-queries.yaml rather than running both.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-exporter
+  namespace: monok8s-platform
+  labels:
+    app: postgres-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-exporter
+  template:
+    metadata:
+      labels:
+        app: postgres-exporter
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+    spec:
+      serviceAccountName: postgres-exporter
+      containers:
+        - name: postgres-exporter
+          image: prometheuscommunity/postgres-exporter:v0.15.0
+          ports:
+            - containerPort: 9187
+              name: metrics
+          env:
+            - name: DATA_SOURCE_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-exporter-secrets
+                  key: dsn
+          args:
+            - --collector.stat_statements
+            - --collector.stat_user_tables
+            - --collector.stat_bgwriter
+            - --collector.replication
+            - --collector.locks
+            - --extend.query-path=/etc/queries
+          volumeMounts:
+            - name: custom-queries
+              mountPath: /etc/queries
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: custom-queries
+          configMap:
+            name: postgres-exporter-queries
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-exporter
+  namespace: monok8s-platform
+  labels:
+    app: postgres-exporter
+spec:
+  ports:
+    - name: metrics
+      port: 9187
+  selector:
+    app: postgres-exporter
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: postgres-exporter
+  namespace: monok8s-platform
+spec:
+  selector:
+    matchLabels:
+      app: postgres-exporter
+  endpoints:
+    - port: metrics
+      interval: 30s

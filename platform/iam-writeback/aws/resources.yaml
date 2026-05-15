@@ -1,0 +1,89 @@
+---
+# SQS FIFO queue — receives EventBridge events for IAM Identity Center changes.
+# FIFO ensures ordered processing per tenant (MessageGroupId = tenantId).
+apiVersion: sqs.aws.upbound.io/v1beta1
+kind: Queue
+metadata:
+  name: monok8s-iam-writeback
+  namespace: monok8s-platform
+spec:
+  forProvider:
+    region: us-east-1
+    fifoQueue: true
+    contentBasedDeduplication: true
+    messageRetentionSeconds: 604800   # 7 days
+    visibilityTimeoutSeconds: 120
+    redrivePolicy:
+      deadLetterTargetArnSelector:
+        matchLabels:
+          monok8s.io/purpose: iam-writeback-dlq
+      maxReceiveCount: 5
+    tags:
+      monok8s.io/managed: "true"
+---
+apiVersion: sqs.aws.upbound.io/v1beta1
+kind: Queue
+metadata:
+  name: monok8s-iam-writeback-dlq
+  namespace: monok8s-platform
+  labels:
+    monok8s.io/purpose: iam-writeback-dlq
+spec:
+  forProvider:
+    region: us-east-1
+    fifoQueue: true
+    messageRetentionSeconds: 1209600  # 14 days
+    tags:
+      monok8s.io/managed: "true"
+---
+# EventBridge rule: captures IAM Identity Center account assignment events.
+# Pattern excludes the Crossplane IRSA role to prevent write-back loop.
+apiVersion: cloudwatchevents.aws.upbound.io/v1beta1
+kind: Rule
+metadata:
+  name: monok8s-iam-writeback
+  namespace: monok8s-platform
+spec:
+  forProvider:
+    region: us-east-1
+    description: "Route IAM Identity Center assignment changes to monok8s write-back queue"
+    eventPattern: |
+      {
+        "source": ["aws.sso"],
+        "detail-type": ["AWS API Call via CloudTrail"],
+        "detail": {
+          "eventSource": ["sso.amazonaws.com"],
+          "eventName": ["CreateAccountAssignment", "DeleteAccountAssignment"],
+          "userIdentity": {
+            "sessionContext": {
+              "sessionIssuer": {
+                "userName": [
+                  {
+                    "anything-but": {
+                      "prefix": "monok8s-crossplane-irsa"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+---
+# EventBridge target: delivers matched events to the SQS queue
+apiVersion: cloudwatchevents.aws.upbound.io/v1beta1
+kind: Target
+metadata:
+  name: monok8s-iam-writeback-sqs
+  namespace: monok8s-platform
+spec:
+  forProvider:
+    region: us-east-1
+    ruleSelector:
+      matchLabels:
+        monok8s.io/rule: iam-writeback
+    sqsTarget:
+      - messageGroupId: iam-writeback
+    arnSelector:
+      matchLabels:
+        monok8s.io/purpose: iam-writeback

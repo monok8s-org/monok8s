@@ -1,0 +1,59 @@
+# gitops-update — opens a PR against the gitops repo updating an
+# image's digest in the kustomize overlay (apps/<service>/k8s/overlays/
+# <env>/kustomization.yaml). ArgoCD's auto-sync polls the repo and
+# rolls out the new digest.
+#
+# Generic per AC#3 — the gitops-repo, file-path, image-name, and
+# new-digest are all parameters. Consumers compose this as the final
+# step of a build pipeline.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: gitops-update
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: gitops-repo
+      type: string
+      description: HTTPS URL of the gitops repo (typically this same monok8s-dev repo).
+    - name: file-path
+      type: string
+      description: Path within the repo to the kustomization file (e.g. apps/api/k8s/overlays/staging/kustomization.yaml).
+    - name: image-name
+      type: string
+      description: kustomize image-name to update (e.g. monok8s/api).
+    - name: new-digest
+      type: string
+      description: sha256 digest to pin (e.g. sha256:abc123...).
+    - name: branch
+      type: string
+      description: Branch to push the update to.
+      default: main
+    - name: commit-message
+      type: string
+      description: Commit message body.
+      default: "chore: bump image digest from Tekton pipeline"
+  workspaces:
+    - name: gitops
+      description: Workspace where the gitops repo will be cloned + updated.
+  steps:
+    - name: clone-and-update
+      image: alpine/git:2.45.2
+      script: |
+        #!/usr/bin/env sh
+        set -eu
+        cd "$(workspaces.gitops.path)"
+        git clone --depth=1 --branch="$(params.branch)" "$(params.gitops-repo)" repo
+        cd repo
+        git config user.email "tekton@monok8s.local"
+        git config user.name  "monok8s tekton"
+        # Update the kustomization image entry. Format:
+        #   images:
+        #     - name: <image-name>
+        #       digest: <new-digest>
+        # We patch the digest in-place via yq (alpine/git ships busybox awk; use sed for portability).
+        sed -i "s|digest: sha256:[a-f0-9]\{64\}|digest: $(params.new-digest)|" \
+            "$(params.file-path)"
+        git add "$(params.file-path)"
+        git commit -m "$(params.commit-message)"
+        git push origin "$(params.branch)"

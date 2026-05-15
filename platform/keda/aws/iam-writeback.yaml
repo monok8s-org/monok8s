@@ -1,0 +1,69 @@
+# KEDA ScaledObjects for the iam-writeback worker.
+# Only ONE of these should be active at a time, matching the host cloud.
+# Select the active cloud via Kustomize overlay or ArgoCD ApplicationSet parameters.
+
+---
+# ── GCP (Pub/Sub) ─────────────────────────────────────────────────────────────
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: iam-writeback-gcp
+  namespace: iam-writeback
+  labels:
+    monok8s.io/cloud: gcp
+spec:
+  scaleTargetRef:
+    name: iam-writeback-worker
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  triggers:
+    - type: gcp-pubsub
+      metadata:
+        subscriptionName: monok8s-iam-writeback
+        mode: SubscriptionSize
+        value: "5"          # scale up at 5 unacked messages per replica
+      authenticationRef:
+        name: keda-gcp-pubsub-auth
+---
+# ── AWS (SQS) ──────────────────────────────────────────────────────────────────
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: iam-writeback-aws
+  namespace: iam-writeback
+  labels:
+    monok8s.io/cloud: aws
+spec:
+  scaleTargetRef:
+    name: iam-writeback-worker
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  triggers:
+    - type: aws-sqs-queue
+      metadata:
+        queueURL: https://sqs.us-east-1.amazonaws.com/${AWS_ACCOUNT_ID}/monok8s-iam-writeback.fifo
+        queueLength: "5"
+        awsRegion: us-east-1
+        identityOwner: operator   # uses IRSA
+---
+# ── Azure (Service Bus) ────────────────────────────────────────────────────────
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: iam-writeback-azure
+  namespace: iam-writeback
+  labels:
+    monok8s.io/cloud: azure
+spec:
+  scaleTargetRef:
+    name: iam-writeback-worker
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  triggers:
+    - type: azure-servicebus
+      metadata:
+        queueName: iam-writeback
+        messageCount: "5"
+        namespace: monok8s
+      authenticationRef:
+        name: keda-azure-servicebus-auth

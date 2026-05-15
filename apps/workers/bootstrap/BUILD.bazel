@@ -1,0 +1,69 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//tools/bazel:oci.bzl", "app_image")
+
+# Install-time admin tenant bootstrap Job (#98a). Runs as a one-shot
+# K8s Job on first cluster install. Idempotent — re-runs after
+# partial failure pick up where the prior run left off. Reads admin
+# email + initialPassword from the install/monok8s-bootstrap-admin
+# Secret, submits OnboardTenantWorkflow for TenantID="system",
+# creates a Zitadel admin human user, writes the SpiceDB
+# system:monok8s#only_system_can_create_tenants relation.
+go_library(
+    name = "bootstrap",
+    srcs = glob(["*.go"], exclude = ["*_test.go"]),
+    importpath = "github.com/monok8s/monok8s/apps/workers/bootstrap",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/auth",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1/unstructured",
+        "@io_k8s_apimachinery//pkg/runtime/schema",
+        "@io_k8s_client_go//dynamic",
+        "@io_k8s_client_go//kubernetes",
+        "@io_k8s_client_go//rest",
+        "@io_k8s_client_go//tools/clientcmd",
+        "@io_temporal_go_sdk//client",
+    ],
+)
+
+go_binary(
+    name = "bootstrap_bin",
+    embed = [":bootstrap"],
+)
+
+# L1 unit test — mocked Temporal/k8s/Zitadel/SpiceDB factories. 5 cases:
+# first-install success, idempotent skip on existing system tenant,
+# secret-missing, secret-missing-email-key, spicedb-write propagation.
+# Tagged `impure` because the Zitadel fake uses httptest.NewServer
+# (loopback socket).
+go_test(
+    name = "bootstrap_test",
+    srcs = ["run_test.go"],
+    embed = [":bootstrap"],
+    tags = ["impure"],
+    deps = [
+        "@com_github_stretchr_testify//mock",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1/unstructured",
+        "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_apimachinery//pkg/runtime/schema",
+        "@io_k8s_client_go//dynamic",
+        "@io_k8s_client_go//dynamic/fake",
+        "@io_k8s_client_go//kubernetes",
+        "@io_k8s_client_go//kubernetes/fake",
+        "@io_temporal_go_sdk//client",
+        "@io_temporal_go_sdk//mocks",
+    ],
+)
+
+# OCI image — distroless_static base via tools/bazel/oci.bzl. The
+# K8s Job at //platform/monok8s-bootstrap:bootstrap-job.yaml runs
+# this image.
+app_image(
+    name = "image",
+    binary = ":bootstrap_bin",
+    language = "go",
+    description = "monok8s install-time admin tenant bootstrap Job",
+)

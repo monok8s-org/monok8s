@@ -1,0 +1,25 @@
+"""require-tenant-label rego policy + opa_test for it (#17 AC#5)."""
+
+load("@rules_opa//:defs.bzl", "opa_test")
+
+# L1 hermetic test of the rejection logic. opa_test discovers
+# test_<name> rules in *_test.rego files and exits non-zero on any
+# failure. Covers AC#5's "Namespace without the label is rejected"
+# requirement at the rego layer; full Gatekeeper-mediated rejection
+# (admission webhook in-cluster) lives in #37 L4.
+opa_test(
+    name = "require_tenant_label_test",
+    srcs = [
+        "require_tenant_label.rego",
+        "require_tenant_label_test.rego",
+    ],
+    tags = ["pure"],
+)
+
+exports_files(
+    [
+        "require_tenant_label.rego",
+        "require_tenant_label_test.rego",
+    ],
+    visibility = ["//platform/opa:__subpackages__"],
+)

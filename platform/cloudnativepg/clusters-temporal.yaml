@@ -1,0 +1,64 @@
+---
+# Temporal gets its own Postgres cluster.
+# Note: Temporal's persistence_latency alert (> 0.5s p99) is the signal to
+# migrate this cluster to Cassandra. Until that alert fires, Postgres is fine.
+# Simplification: same operator, same backup strategy as all other clusters.
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: monok8s-temporal
+  namespace: monok8s-platform
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+
+  postgresql:
+    parameters:
+      max_connections: "300"
+      shared_buffers: "512MB"
+      # Temporal is write-heavy — tune checkpoint and WAL
+      checkpoint_completion_target: "0.9"
+      wal_buffers: "16MB"
+      max_wal_size: "2GB"
+
+  bootstrap:
+    initdb:
+      database: temporal
+      owner: temporal
+      secret:
+        name: monok8s-temporal-superuser
+
+  backup:
+    retentionPolicy: "30d"
+    barmanObjectStore:
+      destinationPath: "s3://monok8s-pgbackups/temporal"
+      s3Credentials:
+        accessKeyId:
+          name: pg-backup-secrets
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: pg-backup-secrets
+          key: SECRET_ACCESS_KEY
+      wal:
+        compression: gzip
+
+  monitoring:
+    enablePodMonitor: true
+
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: monok8s-temporal-rw
+  namespace: monok8s-platform
+spec:
+  cluster:
+    name: monok8s-temporal
+  type: rw
+  instances: 2
+  pgbouncer:
+    poolMode: session               # Temporal requires session mode (uses advisory locks)
+    parameters:
+      max_client_conn: "300"
+      default_pool_size: "20"

@@ -1,0 +1,40 @@
+---
+# Temporal server exposes Prometheus metrics natively — no sidecar needed.
+# Simplification: this is the pattern for all platform services that expose
+# native /metrics endpoints. ServiceMonitor + no exporter = less to operate.
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: temporal-frontend
+  namespace: monok8s-platform
+spec:
+  namespaceSelector:
+    matchNames: [temporal]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: temporal
+      app.kubernetes.io/component: frontend
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: temporal-history
+  namespace: monok8s-platform
+spec:
+  namespaceSelector:
+    matchNames: [temporal]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: temporal
+      app.kubernetes.io/component: history
+  endpoints:
+    - port: metrics
+      interval: 30s
+      # temporal_persistence_latency_bucket  ← primary Postgres scaling signal
+      # temporal_workflow_active_count        ← concurrent workflow signal

@@ -1,0 +1,26 @@
+# Harbor — defaults to the bare-metal/PVC overlay. GKE deployments
+# re-target `path` to `platform/harbor/overlays/gcp` for GCS-backed
+# registry storage. Sync wave 2 (after CNPG operator at wave 0).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: harbor
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: monok8s
+  source:
+    repoURL: https://github.com/monok8s-org/monok8s-dev
+    targetRevision: main
+    path: platform/harbor/overlays/baremetal
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: harbor
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

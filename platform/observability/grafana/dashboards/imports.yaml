@@ -1,0 +1,40 @@
+---
+# Import these community dashboards into Grafana.
+# Simplification: import rather than build — community dashboards are maintained
+# upstream and cover 90% of needs. Only build custom dashboards for
+# monok8s-specific panels (event table growth, tenant distribution, etc.).
+#
+# Import via Grafana UI: Dashboards → Import → paste ID
+# Or via Grafana provisioning (preferred — version controlled):
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-imports
+  namespace: monok8s-platform
+  labels:
+    grafana_dashboard: "1"
+data:
+  # ── Postgres ──────────────────────────────────────────────────────────────
+  # ID 9628  — postgres_exporter overview (connections, cache hit, TPS, locks)
+  # ID 17350 — CloudNativePG cluster overview (failover, replication, WAL)
+  # ID 14022 — PgBouncer (pool utilisation, wait queue, client connections)
+
+  # ── Temporal ──────────────────────────────────────────────────────────────
+  # Import from: https://github.com/temporalio/dashboards
+  # Key panels: workflow active count, persistence latency, failure rate
+
+  # ── SpiceDB ───────────────────────────────────────────────────────────────
+  # Import from: https://github.com/authzed/spicedb/tree/main/pkg/metrics
+
+  # ── K8s / platform ────────────────────────────────────────────────────────
+  # ID 15760 — Kubernetes cluster overview
+  # ID 17900 — KEDA ScaledObject status
+
+  # ── Custom dashboards (build these) ───────────────────────────────────────
+  # platform/observability/grafana/dashboards/event-tables.json
+  #   panels: row count per partition, write rate, dead tuple ratio per table,
+  #           correction event rate, oldest transaction
+  #
+  # platform/observability/grafana/dashboards/tenant-health.json
+  #   panels: active tenants, events per tenant (top 10), storage per tenant

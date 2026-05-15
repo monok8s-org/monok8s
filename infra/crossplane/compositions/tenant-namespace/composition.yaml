@@ -1,0 +1,322 @@
+# tenant-namespace — the cloud-agnostic trunk Composition for tenant
+# onboarding. Reconciles an XTenant into the four primitives that every
+# tenant needs regardless of host cloud:
+#
+#   1. Capsule-managed Namespace      → soft-multi-tenancy boundary
+#   2. CloudNativePG Cluster           → per-tenant Postgres
+#   3. Vault Policy + Role             → per-tenant secret-store binding
+#   4. ExternalSecret                  → in-cluster mirror of DB creds
+#
+# Per-cloud overlays (tenant-gcp / future tenant-aws / tenant-azure) layer
+# host-specific resources on top of these primitives. All names + namespaces
+# derived from spec.name (no hardcoding); the postgres image is selected
+# from spec.postgresVersion. See Discussion #3 §Per-layer scope and #14.
+#
+# Pipeline mode + function-patch-and-transform per Crossplane v2 — the
+# legacy `spec.resources` array was removed in v2.0; `pipeline:` is the
+# canonical shape. The function itself is installed cluster-wide (#16).
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: tenant-namespace
+  labels:
+    monok8s.io/composition: tenant-namespace
+spec:
+  compositeTypeRef:
+    apiVersion: monok8s.io/v1alpha1
+    kind: XTenant
+
+  mode: Pipeline
+
+  pipeline:
+    - step: patch-and-transform
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+          # ---------------------------------------------------------
+          # 1. Namespace — Capsule-labeled so the cluster-level
+          #    Capsule Tenant CR (provisioned out-of-band by #17)
+          #    treats it as a member of customer-tenants.
+          # ---------------------------------------------------------
+          - name: namespace
+            base:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                labels:
+                  capsule.clastix.io/tenant: customer-tenants
+                  monok8s.io/managed-by: crossplane
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: ToCompositeFieldPath
+                fromFieldPath: metadata.name
+                toFieldPath: status.namespace
+
+          # ---------------------------------------------------------
+          # 2. CloudNativePG Cluster — per-tenant Postgres using the
+          #    major version requested in spec.postgresVersion.
+          # ---------------------------------------------------------
+          - name: postgres-cluster
+            base:
+              apiVersion: postgresql.cnpg.io/v1
+              kind: Cluster
+              spec:
+                instances: 1
+                storage:
+                  size: 1Gi
+                bootstrap:
+                  initdb:
+                    database: app
+                    owner: app
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "%s-db"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.namespace
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.postgresVersion
+                toFieldPath: spec.imageName
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "ghcr.io/cloudnative-pg/postgresql:%s"
+              - type: ToCompositeFieldPath
+                fromFieldPath: status.connectionInfo.host
+                toFieldPath: status.dbHost
+
+          # ---------------------------------------------------------
+          # 3a. Vault Policy — grants read on
+          #     secret/data/tenants/<name>/* via crossplane-contrib's
+          #     provider-vault.
+          # 3b. Vault AuthBackendRole — binds the tenant's K8s
+          #     ServiceAccount to the policy via the kubernetes auth
+          #     backend (#18 installs the backend; this Composition
+          #     just wires per-tenant scope).
+          # ---------------------------------------------------------
+          - name: vault-policy
+            base:
+              apiVersion: vault.crossplane.io/v1alpha1
+              kind: Policy
+              spec:
+                forProvider:
+                  policy: |
+                    path "secret/data/tenants/PLACEHOLDER/*" {
+                      capabilities = ["read"]
+                    }
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.policy
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: |
+                        path "secret/data/tenants/%s/*" {
+                          capabilities = ["read"]
+                        }
+
+          - name: vault-role
+            base:
+              apiVersion: vault.crossplane.io/v1alpha1
+              kind: AuthBackendRole
+              spec:
+                forProvider:
+                  backend: kubernetes
+                  tokenTtl: 3600
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.roleName
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.boundServiceAccountNamespaces[0]
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              # tokenPolicies binds the tenant SA to both per-tenant
+              # Vault policies — `tenant-<name>` (KV at secret/data/tenants/<name>/*)
+              # and `tenant-<name>-transit` (transit-key surface, see
+              # the `vault-transit-policy` resource below; #83).
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.tokenPolicies[0]
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.tokenPolicies[1]
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s-transit"
+
+          # ---------------------------------------------------------
+          # 3c. Vault Policy — per-tenant transit-key surface (#83).
+          #     PII encryption + crypto-shred via key deletion. Each
+          #     tenant owns `transit/keys/tenant-<name>`; the
+          #     Workflow step `mint-tenant-vault-key` creates the key
+          #     with convergent_encryption=true + derived=true so
+          #     deterministic ciphertext indexes work; the key is
+          #     deletable (after setting deletion_allowed=true on
+          #     `transit/keys/tenant-<name>/config`) for the right-
+          #     to-be-forgotten flow.
+          # ---------------------------------------------------------
+          - name: vault-transit-policy
+            base:
+              apiVersion: vault.crossplane.io/v1alpha1
+              kind: Policy
+              spec:
+                forProvider:
+                  policy: |
+                    path "transit/keys/PLACEHOLDER" {
+                      capabilities = ["create", "read", "update", "delete"]
+                    }
+                    path "transit/keys/PLACEHOLDER/config" {
+                      capabilities = ["update"]
+                    }
+                    path "transit/encrypt/PLACEHOLDER" {
+                      capabilities = ["update"]
+                    }
+                    path "transit/decrypt/PLACEHOLDER" {
+                      capabilities = ["update"]
+                    }
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s-transit"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s-transit"
+              # Multi-path policy HCL with `tenant-<name>` substituted
+              # at every PLACEHOLDER. Single Format transform with four
+              # `%s` placeholders matches the four paths.
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.policy
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: |
+                        path "transit/keys/tenant-%s" {
+                          capabilities = ["create", "read", "update", "delete"]
+                        }
+                        path "transit/keys/tenant-%s/config" {
+                          capabilities = ["update"]
+                        }
+                        path "transit/encrypt/tenant-%s" {
+                          capabilities = ["update"]
+                        }
+                        path "transit/decrypt/tenant-%s" {
+                          capabilities = ["update"]
+                        }
+
+          # ---------------------------------------------------------
+          # 4. ExternalSecret — in-cluster Secret materialized from
+          #    Vault by external-secrets-operator (#18). Lands in the
+          #    tenant's namespace so workloads can reference it
+          #    directly.
+          # ---------------------------------------------------------
+          - name: db-creds
+            base:
+              apiVersion: external-secrets.io/v1beta1
+              kind: ExternalSecret
+              spec:
+                refreshInterval: 1h
+                secretStoreRef:
+                  name: vault-backend
+                  kind: ClusterSecretStore
+                target:
+                  name: db-credentials
+                  creationPolicy: Owner
+                data:
+                  - secretKey: password
+                    remoteRef:
+                      key: secret/data/tenants/PLACEHOLDER/db
+                      property: password
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.namespace
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.data[0].remoteRef.key
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "secret/data/tenants/%s/db"

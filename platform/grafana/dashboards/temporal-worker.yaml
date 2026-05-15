@@ -1,0 +1,61 @@
+# Temporal SDK worker dashboard — vendored as a ConfigMap that
+# Grafana's sidecar discovers via grafana_dashboard=1. AC#4 of #25.
+#
+# This is a stub vendored dashboard — minimum-functional shape with
+# task-queue depth + worker-poll-success-rate panels. Production
+# upgrade path: import a richer dashboard from grafana.com (e.g.
+# Temporal SDK Metrics #17620 once their auth-required public API
+# settles) and re-vendor here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-temporal-worker
+  namespace: grafana
+  labels:
+    grafana_dashboard: "1"
+data:
+  temporal-worker.json: |
+    {
+      "title": "Temporal Workers",
+      "schemaVersion": 39,
+      "version": 1,
+      "uid": "temporal-worker",
+      "tags": ["temporal", "monok8s", "vendored"],
+      "time": {"from": "now-1h", "to": "now"},
+      "templating": {
+        "list": [
+          {
+            "name": "task_queue",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "mimir"},
+            "query": "label_values(temporal_worker_task_slots_available, task_queue)",
+            "refresh": 1,
+            "includeAll": true
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Task queue backlog",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "mimir"},
+          "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+          "targets": [{
+            "expr": "sum(temporal_workflow_task_schedule_to_start_latency_count{task_queue=~\"$task_queue\"}) by (task_queue)",
+            "legendFormat": "{{task_queue}}"
+          }]
+        },
+        {
+          "id": 2,
+          "title": "Worker poll success rate",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "mimir"},
+          "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+          "targets": [{
+            "expr": "rate(temporal_worker_poll_success_total{task_queue=~\"$task_queue\"}[5m])",
+            "legendFormat": "{{task_queue}}"
+          }]
+        }
+      ]
+    }

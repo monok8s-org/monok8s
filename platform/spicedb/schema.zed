@@ -1,0 +1,28 @@
+// monok8s SpiceDB schema (#23).
+//
+// Defines the minimum permission model for the 0.1.0 demo path:
+// `tenant`, `user`, and three relations on tenant — `member`,
+// `write`, `read`. The OnboardTenant Temporal workflow's
+// SeedSpiceDBRelation activity (apps/workers/onboarding) populates
+// initial relationships. apps/api uses packages/auth.checkPermission
+// to enforce permission checks on every tenant-scoped procedure.
+//
+// Relations:
+//   • tenant:<slug>#member@user:<id>  — user belongs to tenant.
+//   • tenant:<slug>#write@user:<id>   — user can write tenant resources.
+//   • tenant:<slug>#read@user:<id>    — user can read tenant resources.
+//
+// Permission convention per Discussion #3 §packages/auth: write
+// implies read; both imply member. Members without write/read pairings
+// can list tenants but not enter them.
+definition user {}
+
+definition tenant {
+    relation member: user
+    relation write:  user
+    relation read:   user
+
+    permission can_read   = read + write
+    permission can_write  = write
+    permission can_member = member + write + read
+}

@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cloudnativepg
+  namespace: argocd
+spec:
+  project: monok8s
+  source:
+    repoURL: https://github.com/monok8s-org/monok8s-dev
+    targetRevision: main
+    path: platform/cloudnativepg
+    directory:
+      include: bootstrap.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cnpg-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

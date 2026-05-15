@@ -1,0 +1,88 @@
+# Zitadel upstream IdP: Microsoft Entra ID (Azure AD)
+#
+# Allows enterprise users to sign in to monok8s using their existing
+# Entra ID / Microsoft 365 identity. Zitadel acts as the service provider;
+# Entra is the upstream IdP.
+#
+# Setup steps (Entra side):
+#   1. Register an app in Entra ID:
+#        az ad app create \
+#          --display-name "monok8s-sso" \
+#          --sign-in-audience AzureADMultipleOrgs \
+#          --web-redirect-uris "https://auth.monok8s.io/ui/login/login/externalidp/callback"
+#
+#   2. Create a client secret:
+#        az ad app credential reset --id <app_id> --display-name monok8s-sso
+#
+#   3. Grant API permissions (Microsoft Graph → User.Read, openid, profile, email)
+#
+#   4. Store client_id and client_secret in Vault:
+#        vault kv put secret/monok8s/idp/entra \
+#          client_id=<app_id> \
+#          client_secret=<secret>
+#
+# The Zitadel IDP config below is applied via the Zitadel Terraform provider
+# or the Zitadel management API. This YAML documents the intended configuration.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zitadel-idp-entra-config
+  namespace: zitadel
+  labels:
+    monok8s.io/managed: "true"
+    monok8s.io/purpose: idp-federation
+data:
+  # Zitadel OIDC IDP configuration (applied via Zitadel management API at startup)
+  # These values are read by the zitadel-idp-provisioner init container.
+  config.json: |
+    {
+      "name": "Microsoft Entra ID",
+      "type": "OIDC_IDP",
+      "oidc_config": {
+        "issuer": "https://login.microsoftonline.com/common/v2.0",
+        "client_id_secret_ref": {
+          "vault_path": "secret/data/monok8s/idp/entra",
+          "client_id_key": "client_id",
+          "client_secret_key": "client_secret"
+        },
+        "scopes": ["openid", "profile", "email"],
+        "id_attribute": "oid",
+        "display_name_attribute": "name",
+        "email_attribute": "email",
+        "username_attribute": "upn",
+        "is_auto_creation": false,
+        "is_auto_update": true,
+        "is_linking_allowed": true,
+        "is_creation_allowed": false
+      },
+      "styling_config": {
+        "button_label": "Sign in with Microsoft",
+        "logo_url": "https://aadcdn.msftauth.net/shared/1.0/content/images/microsoft_logo.svg"
+      }
+    }
+
+---
+# ExternalSecret: pull Entra client credentials from Vault
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: zitadel-idp-entra
+  namespace: zitadel
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: SecretStore
+  target:
+    name: zitadel-idp-entra
+    creationPolicy: Owner
+  data:
+    - secretKey: client_id
+      remoteRef:
+        key: secret/data/monok8s/idp/entra
+        property: client_id
+    - secretKey: client_secret
+      remoteRef:
+        key: secret/data/monok8s/idp/entra
+        property: client_secret

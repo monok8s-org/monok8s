@@ -1,0 +1,76 @@
+# RBAC for the monok8s-bootstrap Job. Scoped narrowly:
+#
+#   - Read the monok8s-bootstrap-admin Secret in the install namespace
+#     (admin email + initialPassword).
+#   - Read the zitadel-admin-sa Secret in the install namespace
+#     (Zitadel mgmt API PAT — provisioned by platform/zitadel/).
+#   - Get/list XTenant XRs cluster-wide (idempotency check).
+#
+# The bootstrap binary uses an in-cluster ServiceAccount; this RBAC
+# attaches to that SA. The Temporal + SpiceDB + Zitadel API calls go
+# over the network using credentials sourced from mounted Secrets,
+# so no additional K8s permissions are needed for those.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: monok8s-bootstrap
+  namespace: install
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: monok8s-bootstrap
+  namespace: install
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - monok8s-bootstrap-admin
+      - zitadel-admin-sa
+      - spicedb-preshared-key
+    verbs: ["get"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: monok8s-bootstrap
+  namespace: install
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: monok8s-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: monok8s-bootstrap
+    namespace: install
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: monok8s-bootstrap
+rules:
+  - apiGroups: ["monok8s.io"]
+    resources: ["xtenants"]
+    verbs: ["get", "list"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: monok8s-bootstrap
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: monok8s-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: monok8s-bootstrap
+    namespace: install

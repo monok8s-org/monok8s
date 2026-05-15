@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: api
+  namespace: argocd
+spec:
+  project: monok8s
+  source:
+    repoURL: https://github.com/monok8s/monok8s
+    targetRevision: main
+    path: apps/api/k8s/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monok8s-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

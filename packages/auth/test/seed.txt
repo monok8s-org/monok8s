@@ -1,0 +1,93 @@
+# packages/auth seed relationships — exercises every relation in schema.zed.
+# Loaded by the L2 spicedb_test (//packages/auth:permissions_test) via the
+# rules_spicedb v0.2 zed-import path. Caveat tuples use the standard import
+# syntax `resource:id#relation@subject:id[caveatname:{json}]`.
+#
+# Cast (deliberately stable so permissions_test.sh can reference by name):
+#
+#   user:alice          — platform super_admin (bypass)
+#   user:bob, carol     — tenant:acme owners (last-owner protection)
+#   user:jane           — tenant:acme owner BUT suspended (cannot delete/transfer)
+#   user:dave           — tenant:acme admin (direct)
+#   user:eve            — tenant:acme member (write/read but no manage_members)
+#   user:frank          — tenant:acme viewer (read-only)
+#   user:grace          — tenant:acme billing_manager
+#   user:henry          — tenant:acme admin BUT suspended (no write)
+#   user:iris           — tenant:acme admin BUT denied (no read)
+#   user:kate           — direct member of group:engineering (admin on acme)
+#   user:liam           — member of group:senior_eng nested under engineering
+#   user:nina           — temporary admin with expiry caveat
+#   user:mike           — member of tenant:beta only (cross-tenant isolation)
+#
+#   group:engineering   — admin on tenant:acme
+#   group:senior_eng    — nested under engineering (its members inherit admin)
+#
+#   service_account:ci_runner — admin on tenant:acme with ip_allowlist caveat
+
+# ── Platform ─────────────────────────────────────────────────────────────
+platform:monok8s#super_admin@user:alice
+
+# Platform back-references for tenants (enables platform->administrate cascade).
+tenant:acme#platform@platform:monok8s
+tenant:beta#platform@platform:monok8s
+
+# ── Tenant: acme — full role matrix ──────────────────────────────────────
+
+# Two owners — last-owner protection asserts LookupSubjects returns ≥ 1.
+tenant:acme#owner@user:bob
+tenant:acme#owner@user:carol
+
+# Owner who is suspended — must lose delete + transfer_ownership.
+tenant:acme#owner@user:jane
+tenant:acme#suspended@user:jane
+
+# Direct admin (full manage_*).
+tenant:acme#admin@user:dave
+
+# Lower roles.
+tenant:acme#member@user:eve
+tenant:acme#viewer@user:frank
+tenant:acme#billing_manager@user:grace
+
+# Suspended admin — role present, suspended subtracts → no write.
+tenant:acme#admin@user:henry
+tenant:acme#suspended@user:henry
+
+# Denied admin — role present, denied subtracts → no read.
+tenant:acme#admin@user:iris
+tenant:acme#denied@user:iris
+
+# ── Group: engineering (direct admin on acme) ────────────────────────────
+group:engineering#tenant@tenant:acme
+group:engineering#member@user:kate
+tenant:acme#admin@group:engineering#membership
+
+# ── Nested group: senior_eng inside engineering ──────────────────────────
+# Direction per schema: `group:H#member@group:G#membership` makes H's
+# members include G's members. So nesting senior_eng's membership INTO
+# engineering's membership flows engineering's admin role onto liam.
+group:senior_eng#tenant@tenant:acme
+group:senior_eng#member@user:liam
+group:engineering#member@group:senior_eng#membership
+
+# ── Service account: ci_runner with ip_allowlist caveat ──────────────────
+service_account:ci_runner#tenant@tenant:acme
+service_account:ci_runner#self@service_account:ci_runner
+tenant:acme#admin@service_account:ci_runner[ip_allowlist:{"allowed_ips":["10.0.0.1","10.0.0.2"]}]
+
+# ── Temporary grant: nina admin until 2026-04-18T00:00:00Z ───────────────
+tenant:acme#admin@user:nina[expiry:{"expiry_time":"2026-04-18T00:00:00Z"}]
+
+# ── Tenant: beta — cross-tenant isolation harness ────────────────────────
+tenant:beta#member@user:mike
+
+# ── Installation: acme_prod ──────────────────────────────────────────────
+installation:acme_prod#tenant@tenant:acme
+installation:acme_prod#platform@platform:monok8s
+
+# ── System (admin tenant) — #98a ─────────────────────────────────────────
+# user:bootstrap_admin — the system admin seeded at install time.
+# Holds only_system_can_create_tenants → create_tenants permission.
+# Distinct from user:alice (platform super_admin); bootstrap_admin has
+# system-tenant create power but no platform-wide bypass.
+system:monok8s#only_system_can_create_tenants@user:bootstrap_admin

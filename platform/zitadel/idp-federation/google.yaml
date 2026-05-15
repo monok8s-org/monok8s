@@ -1,0 +1,81 @@
+# Zitadel upstream IdP: Google Workspace
+#
+# Allows enterprise users to sign in to monok8s using their Google Workspace
+# or personal Google identity. Zitadel acts as the service provider; Google
+# is the upstream IdP via OIDC.
+#
+# Setup steps (Google side):
+#   1. Create an OAuth 2.0 client in Google Cloud Console:
+#        APIs & Services → Credentials → Create credentials → OAuth client ID
+#        Application type: Web application
+#        Authorized redirect URIs: https://auth.monok8s.io/ui/login/login/externalidp/callback
+#
+#   2. Store credentials in Vault:
+#        vault kv put secret/monok8s/idp/google \
+#          client_id=<client_id> \
+#          client_secret=<client_secret>
+#
+#   For Google Workspace domain restriction (enterprise only — prevents personal
+#   Google accounts from signing in):
+#   - Set hd (hosted domain) claim validation in Zitadel's claim mapping
+#   - Or use the Google OIDC `hd` parameter via additional query params
+#
+# For SAML instead of OIDC (some Google Workspace configs prefer SAML):
+# - Download the IdP metadata XML from Google Admin Console →
+#   Security → Authentication → SSO with third-party IdP
+# - Use Zitadel's SAML IDP type instead
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zitadel-idp-google-config
+  namespace: zitadel
+  labels:
+    monok8s.io/managed: "true"
+    monok8s.io/purpose: idp-federation
+data:
+  config.json: |
+    {
+      "name": "Google",
+      "type": "GOOGLE_IDP",
+      "google_config": {
+        "client_id_secret_ref": {
+          "vault_path": "secret/data/monok8s/idp/google",
+          "client_id_key": "client_id",
+          "client_secret_key": "client_secret"
+        },
+        "scopes": ["openid", "profile", "email"],
+        "is_auto_creation": false,
+        "is_auto_update": true,
+        "is_linking_allowed": true,
+        "is_creation_allowed": false
+      },
+      "styling_config": {
+        "button_label": "Sign in with Google",
+        "logo_url": "https://www.google.com/favicon.ico"
+      }
+    }
+
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: zitadel-idp-google
+  namespace: zitadel
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: SecretStore
+  target:
+    name: zitadel-idp-google
+    creationPolicy: Owner
+  data:
+    - secretKey: client_id
+      remoteRef:
+        key: secret/data/monok8s/idp/google
+        property: client_id
+    - secretKey: client_secret
+      remoteRef:
+        key: secret/data/monok8s/idp/google
+        property: client_secret

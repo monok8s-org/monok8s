@@ -1,0 +1,4 @@
+exports_files(
+    ["smoke.sh"],
+    visibility = ["//platform/capsule:__pkg__"],
+)

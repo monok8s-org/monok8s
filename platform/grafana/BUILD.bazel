@@ -1,0 +1,13 @@
+"""Grafana platform install + datasources + 2 dashboards (#25)."""
+
+sh_test(
+    name = "grafana_smoke",
+    srcs = ["//platform/grafana/testdata:smoke.sh"],
+    data = [
+        "bootstrap.yaml",
+        "dashboards/onboard-tenant.yaml",
+        "dashboards/temporal-worker.yaml",
+        "datasources.yaml",
+    ],
+    tags = ["pure"],
+)

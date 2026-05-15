@@ -1,0 +1,22 @@
+"""Crossplane operator install (#159).
+
+Vendored helm-rendered manifest for the Crossplane v2.2.1 controller.
+ArgoCD reconciles `bootstrap.yaml` into the cluster via the Application
+at //platform/argocd/apps:crossplane.yaml (sync wave 0 — must precede
+every XR / XRD consumer in infra/crossplane/).
+
+Pure grep-based shape smoke; no cluster, no Docker. Mirrors the
+//platform/argo-workflows:bootstrap_smoke pattern.
+"""
+
+exports_files(
+    ["bootstrap.yaml"],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "bootstrap_smoke",
+    srcs = ["//platform/crossplane/testdata:bootstrap_smoke.sh"],
+    data = ["bootstrap.yaml"],
+    tags = ["pure"],
+)

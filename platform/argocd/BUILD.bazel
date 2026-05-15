@@ -1,0 +1,33 @@
+"""ArgoCD bootstrap shape validator (#16).
+
+The L1 sh_test asserts the vendored bootstrap.yaml carries the expected
+Argo CD core resources (CRDs + key Deployments + ApplicationSet
+infrastructure) and the in-repo ApplicationSet + self-managed Application
+have the right structural shape. Static checks only — runtime
+reconciliation lives in the L4 #37 demo path which installs Argo CD
+into a real rules_kind cluster via rules_argocd's argocd_install.
+"""
+
+sh_test(
+    name = "argocd_bootstrap_smoke",
+    srcs = ["//platform/argocd/testdata:smoke.sh"],
+    data = [
+        "apps/argocd.yaml",
+        "appsets/platform-apps.yaml",
+        "bootstrap.yaml",
+    ],
+    tags = [
+        "pure",  # no IO beyond reading data files
+    ],
+)
+
+# Expose bootstrap.yaml + appset for L4 milestone-gate consumption
+# (//tools/tests/e2e:milestone_kind applies these via kind_cluster's
+# `manifests` attribute).
+exports_files(
+    [
+        "bootstrap.yaml",
+        "appsets/platform-apps.yaml",
+    ],
+    visibility = ["//tools/tests/e2e:__pkg__"],
+)

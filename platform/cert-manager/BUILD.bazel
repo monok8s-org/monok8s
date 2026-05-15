@@ -1,0 +1,13 @@
+"""cert-manager bootstrap shape smoke (#24 dep, also serves Capsule)."""
+
+exports_files(
+    ["bootstrap.yaml"],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "cert_manager_smoke",
+    srcs = ["//platform/cert-manager/testdata:smoke.sh"],
+    data = ["bootstrap.yaml"],
+    tags = ["pure"],
+)

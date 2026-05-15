@@ -1,0 +1,75 @@
+---
+# Service Bus namespace + queue — receives Event Grid messages.
+apiVersion: servicebus.azure.upbound.io/v1beta1
+kind: ServiceBusNamespace
+metadata:
+  name: monok8s
+  namespace: monok8s-platform
+spec:
+  forProvider:
+    location: eastus
+    resourceGroupName: monok8s-prod
+    sku: Standard
+    tags:
+      monok8s-managed: "true"
+---
+apiVersion: servicebus.azure.upbound.io/v1beta1
+kind: ServiceBusQueue
+metadata:
+  name: iam-writeback
+  namespace: monok8s-platform
+spec:
+  forProvider:
+    namespaceName: monok8s
+    resourceGroupName: monok8s-prod
+    maxSizeInMegabytes: 1024
+    messageTimeToLive: PT168H        # 7 days (ISO 8601 duration)
+    lockDuration: PT2M
+    maxDeliveryCount: 5
+    deadLetteringOnMessageExpiration: true
+    requiresDuplicateDetection: true
+    duplicateDetectionHistoryTimeWindow: PT1H
+---
+# Event Grid system topic: subscribes to Azure subscription-level authorization events.
+apiVersion: eventgrid.azure.upbound.io/v1beta1
+kind: SystemTopic
+metadata:
+  name: monok8s-iam-events
+  namespace: monok8s-platform
+spec:
+  forProvider:
+    location: global
+    resourceGroupName: monok8s-prod
+    sourceArmResourceId: /subscriptions/${AZURE_SUBSCRIPTION_ID}
+    topicType: Microsoft.Authorization
+---
+# Event Grid subscription: filters app role assignment events, excluding Crossplane.
+# Advanced filters prevent write-back loop: events where caller is Crossplane MI
+# are excluded before delivery.
+apiVersion: eventgrid.azure.upbound.io/v1beta1
+kind: EventSubscription
+metadata:
+  name: monok8s-iam-writeback
+  namespace: monok8s-platform
+spec:
+  forProvider:
+    scope: /subscriptions/${AZURE_SUBSCRIPTION_ID}
+    eventDeliverySchema: CloudEventSchemaV1_0
+    includedEventTypes:
+      - Microsoft.Authorization.RoleAssignmentCreated
+      - Microsoft.Authorization.RoleAssignmentDeleted
+    serviceBusQueueEndpointId: /subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/monok8s-prod/providers/Microsoft.ServiceBus/namespaces/monok8s/queues/iam-writeback
+    # Idempotency fence: exclude events where caller is the Crossplane managed identity.
+    # AZURE_CROSSPLANE_PRINCIPAL_ID is set from Terraform output crossplane_client_id.
+    advancedFilter:
+      stringNotIn:
+        - key: data.claims.oid
+          values:
+            - "${AZURE_CROSSPLANE_PRINCIPAL_ID}"
+    retryPolicy:
+      maxDeliveryAttempts: 10
+      eventTimeToLive: 10080          # 7 days in minutes
+    deadLetterDestination:
+      storageBlob:
+        storageAccountId: /subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/monok8s-prod/providers/Microsoft.Storage/storageAccounts/monok8sprod
+        blobContainerName: iam-writeback-dlq

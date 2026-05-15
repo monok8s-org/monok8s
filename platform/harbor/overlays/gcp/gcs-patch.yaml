@@ -1,0 +1,56 @@
+# Patch the harbor-registry ConfigMap to swap the filesystem driver
+# for GCS. Harbor's registry component reads `STORAGE_TYPE` + the
+# accompanying driver-specific env vars from the registry ConfigMap.
+#
+# Bucket name + service account key path are GKE-environment-specific.
+# Default values here point at a `monok8s-harbor-staging` bucket; the
+# Workload Identity binding (provisioned by tenant-gcp's IAM resources
+# in #15) maps the harbor-registry KSA to a per-environment GSA that
+# has roles/storage.objectAdmin on the bucket.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: harbor-registry
+  namespace: harbor
+data:
+  config.yml: |
+    version: 0.1
+    log:
+      level: info
+      fields:
+        service: registry
+    storage:
+      gcs:
+        bucket: monok8s-harbor-staging
+        # No keyfile — Workload Identity supplies short-lived creds.
+        chunksize: 5242880
+      cache:
+        layerinfo: redis
+      maintenance:
+        uploadpurging:
+          enabled: true
+          age: 168h
+          interval: 24h
+      delete:
+        enabled: true
+      redirect:
+        disable: false
+    http:
+      addr: :5000
+      secret: placeholder
+    auth:
+      token:
+        issuer: harbor-token-issuer
+        realm: http://harbor-core/service/token
+        rootcertbundle: /etc/registry/root.crt
+        service: harbor-registry
+    notifications:
+      endpoints:
+        - name: harbor
+          disabled: false
+          url: http://harbor-core/service/notifications
+          timeout: 3000ms
+          threshold: 5
+          backoff: 1s
+          ignoredmediatypes:
+            - application/octet-stream

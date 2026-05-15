@@ -1,0 +1,29 @@
+# apps/workers/onboarding staging overlay — digest-pinned image entry
+# that Tekton's worker-onboarding-build pipeline (#28) updates after
+# every successful build → push → sign chain. The appset at
+# platform/argocd/appsets/workers.yaml points here for the staging env.
+#
+# Per #28 AC#5: gitops-update commits the new digest into this file.
+# The placeholder digest below is replaced sed-in-place by the Task;
+# it must match the pattern `sha256:[a-f0-9]{64}` exactly.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monok8s-staging
+
+resources:
+  - ../../base
+
+# Override the ClusterRoleBinding subject namespace to staging.
+patches:
+  - patch: |-
+      - op: replace
+        path: /subjects/0/namespace
+        value: monok8s-staging
+    target:
+      kind: ClusterRoleBinding
+      name: monok8s-worker-onboarding
+
+images:
+  - name: harbor.monok8s.internal/monok8s/onboarding
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

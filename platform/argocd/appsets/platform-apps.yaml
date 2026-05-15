@@ -1,0 +1,33 @@
+# Auto-discovers `Application` CRs under `platform/argocd/apps/*.yaml` and
+# reconciles each one. Adding a new platform component means dropping a
+# single Application file under `apps/` and pushing — no edits here.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: platform-apps
+  namespace: argocd
+spec:
+  generators:
+    - git:
+        repoURL: https://github.com/monok8s-org/monok8s-dev
+        revision: main
+        directories:
+          - path: platform/argocd/apps/*
+  template:
+    metadata:
+      name: "{{path.basename}}"
+    spec:
+      project: monok8s
+      source:
+        repoURL: https://github.com/monok8s-org/monok8s-dev
+        targetRevision: main
+        path: "{{path}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: argocd
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

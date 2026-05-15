@@ -1,0 +1,210 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: database-alerts
+  namespace: monok8s-platform
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+
+    # ── MVCC / vacuum ──────────────────────────────────────────────────────────
+
+    - name: postgres.bloat
+      rules:
+        - alert: HighDeadTupleRatio
+          expr: pg_dead_tuple_ratio{relname=~".*_events"} > 0.2
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "MVCC bloat on {{ $labels.relname }}"
+            description: >
+              Dead tuple ratio {{ $value | humanizePercentage }} on {{ $labels.relname }}.
+              Autovacuum is falling behind the correction event rate.
+              Check: SELECT * FROM pg_stat_user_tables WHERE relname = '{{ $labels.relname }}';
+              Fix: ALTER TABLE {{ $labels.relname }} SET (autovacuum_vacuum_scale_factor = 0.01);
+
+        - alert: AutovacuumNotRunning
+          expr: pg_dead_tuple_ratio_seconds_since_autovacuum{relname=~".*_events"} > 3600
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Autovacuum not running on {{ $labels.relname }} for > 1h"
+
+    # ── Connections ────────────────────────────────────────────────────────────
+
+    - name: postgres.connections
+      rules:
+        - alert: ConnectionsApproachingLimit
+          expr: |
+            sum(pg_connections_by_state_count)
+            / on() pg_settings_max_connections > 0.8
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Postgres connections at {{ $value | humanizePercentage }} of max"
+            description: >
+              Consider increasing PgBouncer pool size or adding a read replica pool.
+
+        - alert: PgBouncerClientsWaiting
+          expr: pgbouncer_pools_client_waiting > 0
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "PgBouncer: {{ $value }} clients waiting for connection"
+            description: >
+              Clients are queuing. Common causes:
+              1. Pool size too small — increase default_pool_size
+              2. Long-running transactions holding connections — check pg_oldest_transaction_seconds
+              3. SET (not SET LOCAL) leaking tenant context — audit packages/db
+
+        - alert: LongRunningTransaction
+          expr: pg_oldest_transaction_seconds > 300
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Transaction running for {{ $value | humanizeDuration }}"
+            description: >
+              Long-running transactions block VACUUM and cause MVCC bloat.
+              Common cause: failed Temporal activity holding a DB transaction open.
+
+    # ── Table growth ───────────────────────────────────────────────────────────
+
+    - name: postgres.size
+      rules:
+        - alert: EventTableApproaching100GB
+          expr: pg_table_size_bytes_table_bytes{relname=~".*_events"} > 8e10
+          for: 1h
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "{{ $labels.relname }} at {{ $value | humanize1024 }}B — add partitions"
+            description: >
+              Run packages/db/partman/setup.sql to add range partitioning.
+              Target: monthly partitions, 7-year retention.
+
+        - alert: IndexSizeExceedsTableSize
+          expr: |
+            pg_table_size_bytes_index_bytes{relname=~".*_events"}
+            / pg_table_size_bytes_table_bytes{relname=~".*_events"} > 2
+          for: 1h
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Index size > 2x table size on {{ $labels.relname }}"
+            description: >
+              Review packages/db/queries/user_bitemporal.sql for unused indexes.
+              Check pg_unused_indexes metric for candidates to drop.
+
+    # ── Temporal ───────────────────────────────────────────────────────────────
+
+    - name: temporal
+      rules:
+        - alert: TemporalPersistenceLatencyHigh
+          expr: |
+            histogram_quantile(0.99,
+              rate(temporal_persistence_latency_bucket[5m])
+            ) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Temporal Postgres p99 persistence latency {{ $value }}s"
+            description: >
+              Approaching the Postgres scaling ceiling for Temporal.
+              Action: review platform/temporal/values-override.yaml archival config,
+              then plan migration of platform/cloudnativepg/clusters-temporal.yaml to Cassandra.
+
+        - alert: TemporalWorkflowFailureRateHigh
+          expr: |
+            rate(temporal_workflow_failed_total[5m])
+            / (rate(temporal_workflow_completed_total[5m]) + rate(temporal_workflow_failed_total[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Temporal workflow failure rate {{ $value | humanizePercentage }}"
+
+        - alert: TemporalTaskQueueBacklogHigh
+          expr: temporal_task_queue_tasks_count > 1000
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Temporal task queue backlog: {{ $value }} tasks"
+            description: >
+              Workers may be undersized. Check KEDA ScaledObject in platform/keda/
+              and verify minReplicaCount is >= 1.
+
+    # ── SpiceDB ────────────────────────────────────────────────────────────────
+
+    - name: spicedb
+      rules:
+        - alert: SpiceDBCheckLatencyHigh
+          expr: |
+            histogram_quantile(0.99,
+              rate(spicedb_check_request_duration_seconds_bucket[5m])
+            ) > 0.1
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "SpiceDB check p99 latency {{ $value }}s"
+
+        - alert: SpiceDBDatastoreLatencyHigh
+          expr: |
+            histogram_quantile(0.99,
+              rate(spicedb_datastore_query_duration_seconds_bucket[5m])
+            ) > 0.2
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "SpiceDB datastore p99 {{ $value }}s — Postgres ceiling approaching"
+            description: >
+              SpiceDB's Postgres backing is approaching its scaling limit.
+              Plan migration: update platform/cloudnativepg/clusters-spicedb.yaml
+              to CockroachDB and update SpiceDB datastore config.
+
+        - alert: SpiceDBRelationshipCountHigh
+          expr: spicedb_relationships_total > 40000000
+          for: 1h
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "SpiceDB relationship count {{ $value | humanize }} — approaching Postgres ceiling"
+
+    # ── Replication ────────────────────────────────────────────────────────────
+
+    - name: postgres.replication
+      rules:
+        - alert: ReplicationLagHigh
+          expr: pg_replication_lag_seconds_lag_seconds > 30
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Postgres replica lag {{ $value | humanizeDuration }}"
+            description: >
+              Read replica is falling behind. Read-only queries may return stale data.
+              Check replica pod resources and network throughput.

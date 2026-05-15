@@ -1,0 +1,11 @@
+"""KEDA bootstrap + workers-scaledobject shape smoke (#20)."""
+
+sh_test(
+    name = "keda_smoke",
+    srcs = ["//platform/keda/testdata:smoke.sh"],
+    data = [
+        "bootstrap.yaml",
+        "workers-scaledobject.yaml",
+    ],
+    tags = ["pure"],
+)

@@ -1,0 +1,85 @@
+# GCP Security Command Center → Pub/Sub → security-findings worker
+#
+# Routes SCC findings on monok8s-tagged resources to the security findings
+# worker so they appear in the ops dashboard alongside Model B alerts.
+#
+# Applied via: kubectl apply -f platform/security-findings/gcp/resources.yaml
+# Requires: provider-gcp healthy, Crossplane GCP provider configured
+
+---
+# Pub/Sub topic for SCC notifications
+apiVersion: pubsub.gcp.upbound.io/v1beta1
+kind: Topic
+metadata:
+  name: monok8s-security-findings
+  namespace: crossplane-system
+spec:
+  forProvider:
+    project: "${GCP_PROJECT_ID}"
+    labels:
+      monok8s.io/managed: "true"
+      monok8s.io/purpose: security-findings
+  providerConfigRef:
+    name: provider-gcp
+
+---
+# Pub/Sub subscription — pull, consumed by the security-findings worker
+apiVersion: pubsub.gcp.upbound.io/v1beta1
+kind: Subscription
+metadata:
+  name: monok8s-security-findings-sub
+  namespace: crossplane-system
+spec:
+  forProvider:
+    project: "${GCP_PROJECT_ID}"
+    topicRef:
+      name: monok8s-security-findings
+    ackDeadlineSeconds: 60
+    messageRetentionDuration: "604800s"  # 7 days
+    retainAckedMessages: false
+    deadLetterPolicy:
+      - deadLetterTopicRef:
+          name: monok8s-security-findings-dlq
+        maxDeliveryAttempts: 5
+    labels:
+      monok8s.io/managed: "true"
+  providerConfigRef:
+    name: provider-gcp
+
+---
+# Dead-letter topic for failed finding deliveries
+apiVersion: pubsub.gcp.upbound.io/v1beta1
+kind: Topic
+metadata:
+  name: monok8s-security-findings-dlq
+  namespace: crossplane-system
+spec:
+  forProvider:
+    project: "${GCP_PROJECT_ID}"
+    labels:
+      monok8s.io/managed: "true"
+      monok8s.io/purpose: security-findings-dlq
+  providerConfigRef:
+    name: provider-gcp
+
+---
+# SCC Notification Config — filters findings to monok8s-tagged resources.
+# Created via gcloud (SCC API not yet in Crossplane GCP provider):
+#
+#   gcloud scc notifications create monok8s-findings \
+#     --organization=<org_id> \
+#     --pubsub-topic=projects/${GCP_PROJECT_ID}/topics/monok8s-security-findings \
+#     --filter='resource.labels."monok8s.io/managed" = "true"' \
+#     --description="monok8s security findings"
+#
+# The filter matches any SCC finding where the affected resource has the
+# monok8s.io/managed=true label, which covers all Crossplane-provisioned resources.
+#
+# If you also want HIGH and CRITICAL findings from outside the monok8s tag set:
+#
+#   --filter='severity = "HIGH" OR severity = "CRITICAL"'
+#
+# IAM binding required for the SCC notification service account to publish:
+#   gcloud pubsub topics add-iam-policy-binding monok8s-security-findings \
+#     --member="serviceAccount:service-<project_number>@gcp-sa-scc.iam.gserviceaccount.com" \
+#     --role="roles/pubsub.publisher"

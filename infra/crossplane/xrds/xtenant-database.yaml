@@ -1,0 +1,86 @@
+# XTenantDatabase — Crossplane composite resource for per-tenant database
+# provisioning (#82). One per tenant DB; multiple per tenant if the tenant
+# needs multiple Postgres instances. Cluster-scoped so the Temporal
+# OnboardTenantWorkflow can create it without first reaching into the
+# tenant's namespace.
+#
+# Per Discussion #76 ("A dedicated Postgres instance in the cluster's
+# cloud — CNPG Cluster CR for bare-metal; RDS / Cloud SQL / Azure DB
+# Flexible Server via Crossplane Composition for the cloud profiles"),
+# the `engine` enum starts at `cnpg` only and widens as each cloud's
+# milestone lands its Composition variant.
+#
+# Storage tier maps in the consuming Composition (Composition picks a
+# size per tier; the XRD's job is to gate the enum at admission time so
+# arbitrary disk sizes can't leak into per-tenant resource budgets).
+#
+# This XRD coexists with the existing XTenant XRD — XTenant continues
+# to provision a default 1Gi CNPG Cluster via tenant-namespace for
+# backward-compat; XTenantDatabase is the canonical per-DB pattern
+# going forward. Future refactor (XTenant → namespace-only) is a
+# separate Issue.
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xtenantdatabases.monok8s.io
+spec:
+  group: monok8s.io
+  names:
+    kind: XTenantDatabase
+    plural: xtenantdatabases
+  claimNames:
+    kind: TenantDatabase
+    plural: tenantdatabases
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - tenantName
+                - engine
+                - storage
+                - postgresVersion
+              properties:
+                tenantName:
+                  type: string
+                  description: Tenant slug; selects the per-tenant namespace `tenant-<tenantName>`.
+                  minLength: 1
+                  maxLength: 63
+                  pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                engine:
+                  type: string
+                  description: Database engine. `cnpg` for bare-metal; cloud variants land via separate Compositions in their respective milestones.
+                  enum: ["cnpg"]
+                storage:
+                  type: string
+                  description: Storage tier. Composition maps each tier to a concrete size (small=5Gi, medium=20Gi, large=100Gi for CNPG).
+                  enum: ["small", "medium", "large"]
+                postgresVersion:
+                  type: string
+                  description: PostgreSQL major version.
+                  enum: ["14", "15", "16"]
+                dbName:
+                  type: string
+                  description: Database + role name. Defaults to "app".
+                  default: app
+                  pattern: "^[a-z][a-z0-9_]*$"
+                  minLength: 1
+                  maxLength: 63
+            status:
+              type: object
+              properties:
+                ready:
+                  type: boolean
+                  description: True once the underlying Cluster reports Ready.
+                host:
+                  type: string
+                  description: Service DNS for the primary endpoint of the per-tenant Cluster.
+                secretName:
+                  type: string
+                  description: Name of the connection Secret in the tenant namespace (CNPG auto-creates `<cluster>-app`).

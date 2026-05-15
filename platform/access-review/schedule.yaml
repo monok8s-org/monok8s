@@ -1,0 +1,84 @@
+# Temporal Schedule: quarterly access review
+#
+# Runs AccessReviewWorkflow on the first Monday of each quarter.
+# Runs CloudAccessReviewWorkflow for each cloud in the following week.
+#
+# Applied via: kubectl apply -f platform/access-review/schedule.yaml
+# Requires: Temporal cluster running, "access-review" task queue worker deployed
+
+---
+apiVersion: temporal.io/v1alpha1
+kind: Schedule
+metadata:
+  name: access-review-internal
+  namespace: temporal
+spec:
+  scheduleId: access-review-internal-quarterly
+  spec:
+    # First Monday of January, April, July, October at 02:00 UTC
+    cronExpressions:
+      - "0 2 1-7 1,4,7,10 1"
+  action:
+    startWorkflow:
+      workflowType: AccessReviewWorkflow
+      taskQueue: access-review
+      workflowExecutionTimeout: "72h"  # 3 days for all tenants to respond
+      workflowRunTimeout: "72h"
+
+---
+apiVersion: temporal.io/v1alpha1
+kind: Schedule
+metadata:
+  name: access-review-cloud-aws
+  namespace: temporal
+spec:
+  scheduleId: access-review-cloud-aws-quarterly
+  spec:
+    # Second Monday of each quarter at 03:00 UTC (one week after internal review)
+    cronExpressions:
+      - "0 3 8-14 1,4,7,10 1"
+  action:
+    startWorkflow:
+      workflowType: CloudAccessReviewWorkflow
+      taskQueue: access-review
+      workflowExecutionTimeout: "2h"
+      args:
+        - "aws"
+
+---
+apiVersion: temporal.io/v1alpha1
+kind: Schedule
+metadata:
+  name: access-review-cloud-azure
+  namespace: temporal
+spec:
+  scheduleId: access-review-cloud-azure-quarterly
+  spec:
+    cronExpressions:
+      - "0 4 8-14 1,4,7,10 1"
+  action:
+    startWorkflow:
+      workflowType: CloudAccessReviewWorkflow
+      taskQueue: access-review
+      workflowExecutionTimeout: "2h"
+      args:
+        - "azure"
+
+---
+apiVersion: temporal.io/v1alpha1
+kind: Schedule
+metadata:
+  name: access-review-cloud-gcp
+  namespace: temporal
+spec:
+  scheduleId: access-review-cloud-gcp-quarterly
+  spec:
+    cronExpressions:
+      - "0 5 8-14 1,4,7,10 1"
+  action:
+    startWorkflow:
+      workflowType: CloudAccessReviewWorkflow
+      taskQueue: access-review
+      workflowExecutionTimeout: "2h"
+      args:
+        - "gcp"

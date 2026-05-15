@@ -1,0 +1,518 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("@rules_kubernetes//:defs.bzl", "kubernetes_manifest", "kubernetes_server")
+load("@rules_nats//:defs.bzl", "nats_server")
+load("@rules_temporal//:defs.bzl", "temporal_build", "temporal_server", "temporal_test", "temporal_workflow_history")
+load("//tools/bazel:itest.bzl", "itest_suite")
+load("//tools/bazel:oci.bzl", "app_image")
+
+# Temporal worker library + binary for the `onboarding` task queue.
+# Monolithic `package main` per Go convention — workflows, activities,
+# and the entrypoint all co-located in this directory.
+#
+# Activities are stub-error today (per #84 PR-A); real Crossplane /
+# Argo / NATS integration lands in #124 sub-PRs 2-4 alongside the
+# L2 itest_suite + recorded-history replay_test in sub-PR-5 (via the
+# upstream rules_temporal `temporal_test` + `temporal_workflow_history`
+# primitives).
+#
+# //packages/db is intentionally NOT a dep — the original scaffolding
+# pre-declared it but no activity actually imports packages/db (and
+# the `:db` target alias doesn't exist; tracked in Discussion #45
+# Gap 1 as a separate blocker). Wired back when a real activity needs
+# DB access in sub-PR-3.
+go_library(
+    name = "onboarding",
+    srcs = glob(["*.go"], exclude = ["*_test.go"]),
+    importpath = "github.com/monok8s/monok8s/apps/workers/onboarding",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1/unstructured",
+        "@io_k8s_apimachinery//pkg/runtime/schema",
+        "@io_k8s_client_go//dynamic",
+        "@io_k8s_client_go//rest",
+        "@io_k8s_client_go//tools/clientcmd",
+        "//packages/auth:auth",
+        "@io_temporal_go_api//enums/v1:enums",
+        "@io_temporal_go_sdk//activity",
+        "@io_temporal_go_sdk//client",
+        "@io_temporal_go_sdk//worker",
+        "@io_temporal_go_sdk//workflow",
+    ],
+)
+
+# Binary entrypoint. The library is `package main` per the apps/cli
+# convention (single-directory binary, no cmd/ subdir).
+go_binary(
+    name = "worker",
+    embed = [":onboarding"],
+)
+
+# Workflow-history replay-runner binary. Shares srcs with the
+# production worker via embed=[":onboarding"], but the `replay_runner`
+# go-build tag swaps `main.go`'s production main() out for
+# `replay_runner_main.go`'s replayer-driven main(). Per
+# rules_temporal v0.4.0's custom_replay_runner mechanism. Consumed
+# by the temporal_build :worker_build target below.
+go_binary(
+    name = "replay_runner_bin",
+    embed = [":onboarding"],
+    gotags = ["replay_runner"],
+)
+
+# OCI image — distroless_static base via tools/bazel/oci.bzl's
+# `app_image(language="go", ...)`. Non-functional in production until
+# sub-PRs 2-4 ship real activity implementations; the image build
+# itself is hermetic.
+app_image(
+    name = "image",
+    binary = ":worker",
+    language = "go",
+    description = "monok8s onboarding worker",
+)
+
+# L1 unit test exercising OnboardTenantWorkflow against the activity
+# stubs via Temporal's in-process testsuite. Two cases:
+#   - happy-path with mocked activity returns: verifies AC step order
+#   - error-propagation: first activity errors out; later ones don't run
+# Replay-test against recorded histories lands in sub-PR-5.
+go_test(
+    name = "workflow_test",
+    srcs = ["workflow_test.go"],
+    embed = [":onboarding"],
+    tags = ["pure"],
+    deps = [
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# Testsuite-based unit tests for the TenantRoleAssign/UnassignWorkflows
+# (#232). Pure — uses Temporal's in-process testsuite + a stub
+# activity to assert dispatch + input-field pass-through.
+go_test(
+    name = "workflow_assign_role_test",
+    srcs = ["workflow_assign_role_test.go"],
+    embed = [":onboarding"],
+    tags = ["pure"],
+    deps = [
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# Testsuite-based unit tests for the Assign/Unassign SpiceDB
+# activities (#232). Stubs the tenantRoleWriter interface via
+# setTenantRoleWriterForTesting so no real SpiceDB is needed.
+go_test(
+    name = "activities_assign_role_test",
+    srcs = ["activities_assign_role_test.go"],
+    embed = [":onboarding"],
+    tags = ["pure"],
+    deps = [
+        "//packages/auth:auth",
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# Testsuite-based unit tests for TenantRoleChangeWorkflow (#236).
+# Same shape as workflow_assign_role_test.
+go_test(
+    name = "workflow_change_role_test",
+    srcs = ["workflow_change_role_test.go"],
+    embed = [":onboarding"],
+    tags = ["pure"],
+    deps = [
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# Testsuite-based unit tests for ChangeTenantRoleSpiceDBActivity (#236).
+# Stubs the tenantRoleChanger interface via setTenantRoleChangerForTesting.
+go_test(
+    name = "activities_change_role_test",
+    srcs = ["activities_change_role_test.go"],
+    embed = [":onboarding"],
+    tags = ["pure"],
+    deps = [
+        "//packages/auth:auth",
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# Testsuite-based unit tests for TenantGroupMember Add/Remove
+# workflows (#248). Mirrors workflow_assign_role_test shape.
+go_test(
+    name = "workflow_group_member_test",
+    srcs = ["workflow_group_member_test.go"],
+    embed = [":onboarding"],
+    tags = ["pure"],
+    deps = [
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# Testsuite-based unit tests for AddGroupMemberSpiceDBActivity +
+# RemoveGroupMemberSpiceDBActivity (#248). Stubs the
+# groupMembershipWriter interface.
+go_test(
+    name = "activities_group_member_test",
+    srcs = ["activities_group_member_test.go"],
+    embed = [":onboarding"],
+    tags = ["pure"],
+    deps = [
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# Testsuite-based unit tests for TenantUserSuspend/Reinstate
+# workflows (#252). Mirrors workflow_group_member_test shape.
+go_test(
+    name = "workflow_user_suspend_test",
+    srcs = ["workflow_user_suspend_test.go"],
+    embed = [":onboarding"],
+    tags = ["pure"],
+    deps = [
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# Testsuite-based unit tests for SuspendMemberSpiceDBActivity +
+# ReinstateMemberSpiceDBActivity (#252). Stubs the userSuspendWriter
+# interface via setUserSuspendWriterForTesting.
+go_test(
+    name = "activities_user_suspend_test",
+    srcs = ["activities_user_suspend_test.go"],
+    embed = [":onboarding"],
+    tags = ["pure"],
+    deps = [
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# L1 unit test for EmitTenantCreatedEventActivity (#126). Hermetic
+# in-process nats-server bound to a random port; subscriber reads
+# the published `tenant.acme.events` message and asserts JSON shape.
+# Tagged `impure` because the in-process server binds to a real
+# socket (loopback only; no external network).
+go_test(
+    name = "activities_emit_test",
+    srcs = ["activities_emit_test.go"],
+    embed = [":onboarding"],
+    tags = ["impure"],
+    deps = [
+        "@com_github_nats_io_nats_server_v2//server",
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# L1 unit test for EmitWorkflowStatusActivity (#177 / #88b). Mirrors
+# activities_emit_test (#126): in-process nats-server bound to a
+# random port; subscriber reads the published message and asserts
+# the envelope shape (workflow vs step scope discriminator, step
+# name, subject). Tagged `impure` because the in-process server
+# binds a real loopback socket.
+go_test(
+    name = "activities_workflow_status_test",
+    srcs = ["activities_workflow_status_test.go"],
+    embed = [":onboarding"],
+    tags = ["impure"],
+    deps = [
+        "@com_github_nats_io_nats_server_v2//server",
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# L1 unit test for ProvisionNamespaceActivity + ProvisionDatabaseActivity
+# (#127). Hermetic fake dynamic client (in-memory; no real cluster
+# needed). Tests assert apply behavior + spec shape + status-ready
+# poll + timeout path.
+go_test(
+    name = "activities_xr_test",
+    srcs = ["activities_xr_test.go"],
+    embed = [":onboarding"],
+    tags = ["pure"],
+    deps = [
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1/unstructured",
+        "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_apimachinery//pkg/runtime/schema",
+        "@io_k8s_client_go//dynamic",
+        "@io_k8s_client_go//dynamic/fake",
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# L1 unit test for the compensation cleanup activities (#129a). Pattern
+# mirrors activities_argo_test (in-process nats-server + dynamic/fake)
+# plus the existing activities_xr_test fake-client + apierrors patterns.
+# 9 cases: real DELETE-XR succeeds + 404-already-gone + empty-tenantID
+# guard for both namespace + database; stub-error guard for vault-key;
+# NATS publish + JSON envelope + RFC3339 timestamp + empty-tenantID
+# guard for emit-failed.
+# Tagged impure — in-process nats-server binds a loopback socket.
+go_test(
+    name = "activities_cleanup_test",
+    srcs = ["activities_cleanup_test.go"],
+    embed = [":onboarding"],
+    tags = ["impure"],
+    deps = [
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@com_github_nats_io_nats_server_v2//server",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1/unstructured",
+        "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_apimachinery//pkg/runtime/schema",
+        "@io_k8s_client_go//dynamic",
+        "@io_k8s_client_go//dynamic/fake",
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# L1 unit test for MintTenantVaultKeyActivity + RunMigrationsActivity
+# (#128). Combines the in-process nats-server fixture (#126 pattern)
+# with the fake dynamic client (#127 pattern). The test publishes the
+# Argo phase string on the per-step NATS subject to simulate what
+# Argo's onExit step does in-cluster.
+# Tagged `impure` (nats-server binds a loopback socket; same
+# classification as activities_emit_test).
+go_test(
+    name = "activities_argo_test",
+    srcs = ["activities_argo_test.go"],
+    embed = [":onboarding"],
+    tags = ["impure"],
+    deps = [
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@com_github_nats_io_nats_server_v2//server",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1/unstructured",
+        "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_apimachinery//pkg/runtime/schema",
+        "@io_k8s_client_go//dynamic",
+        "@io_k8s_client_go//dynamic/fake",
+        "@io_temporal_go_sdk//testsuite",
+    ],
+)
+
+# Temporal worker registration manifest (#129b). Lists every workflow
+# + activity the :worker binary registers at runtime so the launcher
+# below can validate the running worker's pollers match declarations.
+# Source of truth: run.go's w.RegisterWorkflow / w.RegisterActivity
+# calls (lines 43-93). Temporal registers activities by Go function
+# name (no RegisterActivityWithOptions overrides in run.go), so each
+# function name maps 1:1 to the declared activity type name.
+#
+# `replay_runner` attribute (per rules_temporal v0.4.0) supplies the
+# Go replay runner that `temporal_test`'s launcher invokes for each
+# committed history JSON. Shares onboarding's package main srcs via
+# the `replay_runner` go-build tag.
+temporal_build(
+    name = "worker_build",
+    replay_runner = ":replay_runner_bin",
+    activity_types = [
+        # Workflow status emit (#177 / #88b):
+        "EmitWorkflowStatusActivity",
+        # OnboardTenantWorkflow forward path (#84):
+        "ProvisionNamespaceActivity",
+        "ProvisionDatabaseActivity",
+        "MintTenantVaultKeyActivity",
+        "RunMigrationsActivity",
+        "EmitTenantCreatedEventActivity",
+        # OnboardTenantWorkflow compensation cleanup (#129a):
+        "DeleteTenantNamespaceActivity",
+        "DeleteTenantDatabaseActivity",
+        "DeleteTenantVaultKeyActivity",
+        "EmitTenantCreationFailedEventActivity",
+        # Legacy tenant-onboarding scaffolding (run.go):
+        "CreateZitadelOrgActivity",
+        "WritePermissionsActivity",
+        "RegisterMeteringActivity",
+        # RegisterUserWorkflow + ErasureWorkflow:
+        "ProvisionVaultKeyActivity",
+        "WritePIIActivity",
+        "WriteUserEventActivity",
+        "WriteUserSpiceDBActivity",
+        "WriteMemberSpiceDBActivity",
+        "WriteMemberEventActivity",
+        "WriteUserDeletedEventActivity",
+        "DeleteVaultKeyActivity",
+        "DeletePIIRowActivity",
+        "RevokeZitadelUserActivity",
+        "RemoveUserSpiceDBActivity",
+        # TemporaryGrantWorkflow:
+        "RemoveGrantSpiceDBActivity",
+        "UpdateGrantStatusActivity",
+        # InstallationRegistration / HeartbeatMonitor / Revocation:
+        "ValidateBootstrapTokenActivity",
+        "IssueInstallationCertActivity",
+        "GenerateInstallationAPIKeyActivity",
+        "WriteInstallationSpiceDBActivity",
+        "ActivateInstallationActivity",
+        "UpdateInstallationHeartbeatActivity",
+        "FireInstallationAlertActivity",
+        "SignalHeartbeatMonitorActivity",
+        "RevokeInstallationCertActivity",
+        "RevokeInstallationSpiceDBActivity",
+        "MarkInstallationRevokedActivity",
+        # TenantRoleAssign/UnassignWorkflows (#232 — PR-1 of roles.assign chain):
+        "AssignTenantRoleSpiceDBActivity",
+        "UnassignTenantRoleSpiceDBActivity",
+        # TenantRoleChangeWorkflow (#236):
+        "ChangeTenantRoleSpiceDBActivity",
+        # TenantGroupMember Add/Remove workflows (#248):
+        "AddGroupMemberSpiceDBActivity",
+        "RemoveGroupMemberSpiceDBActivity",
+        # TenantUserSuspend/Reinstate workflows (#252):
+        "SuspendMemberSpiceDBActivity",
+        "ReinstateMemberSpiceDBActivity",
+    ],
+    task_queue = "onboarding",
+    worker_binary = ":worker",
+    workflow_types = [
+        "OnboardTenantWorkflow",
+        "RegisterUserWorkflow",
+        "ErasureWorkflow",
+        "TemporaryGrantWorkflow",
+        "InstallationRegistrationWorkflow",
+        "InstallationHeartbeatMonitorWorkflow",
+        "InstallationRevocationWorkflow",
+        # TenantRoleAssign/UnassignWorkflows (#232):
+        "TenantRoleAssignWorkflow",
+        "TenantRoleUnassignWorkflow",
+        # TenantRoleChangeWorkflow (#236):
+        "TenantRoleChangeWorkflow",
+        # TenantGroupMember Add/Remove workflows (#248):
+        "TenantGroupMemberAddWorkflow",
+        "TenantGroupMemberRemoveWorkflow",
+        # TenantUserSuspend/Reinstate workflows (#252):
+        "TenantUserSuspendWorkflow",
+        "TenantUserReinstateWorkflow",
+    ],
+)
+
+# ── L2 itest_suite for OnboardTenantWorkflow (#129c) ────────────────────
+#
+# 3-server hermetic environment (k8s + nats + temporal) running the
+# production :worker subprocess against simulated controllers (the
+# driver_test.go's 2 sidecar Watch goroutines fake Crossplane reconcile
+# and Argo Workflows onExit). Captures workflow history JSON to
+# $TEST_UNDECLARED_OUTPUTS_DIR which the operator extracts + commits
+# to testdata/histories/ to close #129b's replay-test Gap.
+
+# Manifest aggregation pre-applied via kubernetes_manifest →
+# kubernetes_server's kubectl-apply step:
+#   - Crossplane meta-CRDs (compositeresourcedefinitions, compositions)
+#     so the XTenant + XTenantDatabase XRDs admit cleanly.
+#   - XTenant + XTenantDatabase XRDs — the CR kinds activities_xr.go
+#     submits.
+#   - argoproj.io Workflow CRD — the CR kind activities_argo.go
+#     submits. Minimal local vendoring; see the CRD file's header for
+#     why we don't slice from platform/argo-workflows/bootstrap.yaml.
+#   - argo Namespace — activities_argo.go hardcodes this namespace.
+kubernetes_manifest(
+    name = "itest_manifests",
+    srcs = [
+        # Minimal plain CRDs for the XR kinds + Argo Workflow kind.
+        # Crossplane XRDs at //infra/crossplane/xrds/ register API
+        # kinds only when the Crossplane controller is reconciling
+        # them; in this envtest's bare apiserver+etcd, an XRD is just
+        # data in etcd. Plain CRDs registered directly here let
+        # dynamic.Interface.Create(xtenantGVR) succeed; the driver's
+        # sidecar simulates Crossplane reconcile by patching
+        # status.ready=true.
+        "testdata/itest/crds/workflows.argoproj.io.yaml",
+        "testdata/itest/crds/xtenantdatabases.monok8s.io.yaml",
+        "testdata/itest/crds/xtenants.monok8s.io.yaml",
+        "testdata/itest/manifests/argo-namespace.yaml",
+    ],
+)
+
+kubernetes_server(
+    name = "itest_k8s",
+    manifests = ":itest_manifests",
+)
+
+nats_server(
+    name = "itest_nats",
+)
+
+temporal_server(
+    name = "itest_temporal",
+)
+
+# Go test driver. Tagged `manual` because the itest_suite wrapper is
+# the public entry point — running this directly skips the server
+# orchestration. The driver spawns the :worker binary as a subprocess
+# (data dep) and runs the 2 sidecar Watch goroutines in-process.
+go_test(
+    name = "workflow_itest_driver",
+    srcs = ["itest/driver_test.go"],
+    data = [":worker"],
+    # `impure` for the test_purity_tagging code-design rule (the
+    # driver binds loopback sockets via the spawned :worker subprocess
+    # + sidecar Watch connections). `manual` because the itest_suite
+    # wrapper is the public entry point.
+    tags = [
+        "impure",
+        "manual",
+    ],
+    deps = [
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@rules_go//go/runfiles",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1/unstructured",
+        "@io_k8s_apimachinery//pkg/runtime/schema",
+        "@io_k8s_apimachinery//pkg/watch",
+        "@io_k8s_client_go//dynamic",
+        "@io_k8s_client_go//tools/clientcmd",
+        "@io_temporal_go_api//enums/v1:enums",
+        "@io_temporal_go_sdk//client",
+        "@org_golang_google_protobuf//encoding/protojson",
+    ],
+)
+
+# Public target. Brings up k8s+nats+temporal; exec's the Go driver.
+# Tagged `impure` per the established convention for L2 envtests.
+itest_suite(
+    name = "workflow_itest",
+    servers = {
+        "k8s": ":itest_k8s",
+        "nats": ":itest_nats",
+        "temporal": ":itest_temporal",
+    },
+    tags = ["impure"],
+    test = ":workflow_itest_driver",
+)
+
+# Recorded histories for the replay_test. The 649-event JSON at
+# testdata/histories/onboard_tenant_happy.json was captured by
+# #129c's L2 test driver via client.GetWorkflowHistory + protojson.
+temporal_workflow_history(
+    name = "histories",
+    srcs = glob(["testdata/histories/*.json"]),
+    worker = ":worker_build",
+)
+
+# Recorded-history replay test. temporal_test's launcher boots a
+# transient `temporal server start-dev`, starts the :worker binary,
+# validates the running pollers match worker_build's declarations,
+# replays every committed history via the custom_replay_runner
+# (`:replay_runner_bin` — a Go binary using worker.WorkflowReplayer),
+# then exec's the no-op test body. Non-determinism in the workflow
+# code fails the target.
+#
+# Closes #129b's long-standing Gap (history replay actually running)
+# per rules_temporal v0.4.0's per-language-runner support.
+#
+# Naming convention per tools/bazel/CLAUDE.md ("Temporal replay test
+# targets are always named `replay_test`"). Tagged `impure` because
+# the launcher binds a loopback port for the dev server.
+temporal_test(
+    name = "replay_test",
+    srcs = ["replay_only.sh"],
+    history = ":histories",
+    tags = ["impure"],
+    worker = ":worker_build",
+)

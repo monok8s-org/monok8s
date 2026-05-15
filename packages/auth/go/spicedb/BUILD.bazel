@@ -1,0 +1,10 @@
+"""packages/auth/go/spicedb — stub helper surface for iam-writeback (#107)."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "spicedb",
+    srcs = ["spicedb.go"],
+    importpath = "github.com/monok8s/monok8s/packages/auth/go/spicedb",
+    visibility = ["//visibility:public"],
+)

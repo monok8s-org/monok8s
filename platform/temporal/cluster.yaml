@@ -1,0 +1,29 @@
+# Per-Temporal CloudNativePG cluster. Backs Temporal's persistence —
+# history, matching, frontend, and visibility all share this Postgres
+# (separate database within it: `temporal` for the core schema +
+# `temporal_visibility` for the visibility schema, per Temporal's
+# canonical schema split).
+#
+# Single instance for 0.1.0 (multi-instance + read replicas are a
+# 0.2.0+ scaling decision). Distinct from SpiceDB's spicedb-db
+# Cluster (#23) — Temporal and SpiceDB do not share a database.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: temporal-db
+  namespace: temporal
+spec:
+  instances: 1
+  storage:
+    size: 10Gi
+  bootstrap:
+    initdb:
+      database: temporal
+      owner: temporal
+      postInitApplicationSQL:
+        # Temporal's visibility schema lives in a sibling database.
+        - CREATE DATABASE temporal_visibility OWNER temporal;
+  postgresql:
+    parameters:
+      # Temporal's history shard tables index frequently — bump WAL.
+      max_wal_size: 2GB

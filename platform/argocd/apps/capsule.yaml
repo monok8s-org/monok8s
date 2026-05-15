@@ -1,0 +1,23 @@
+# Capsule namespace-as-tenant operator. Bootstrap manifest + default
+# tenant template (see platform/capsule/).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: capsule
+  namespace: argocd
+spec:
+  project: monok8s
+  source:
+    repoURL: https://github.com/monok8s-org/monok8s-dev
+    targetRevision: main
+    path: platform/capsule
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: capsule-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true   # CRDs are large; ServerSideApply preferred

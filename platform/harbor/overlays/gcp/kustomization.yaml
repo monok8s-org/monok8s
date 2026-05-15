@@ -1,0 +1,16 @@
+# GCS storage overlay for GKE deployments. Patches the harbor-registry
+# StatefulSet to use the GCS driver instead of filesystem-on-PVC.
+#
+# Per AC#3 of #27. Active when ArgoCD `Application` re-targets
+# `path: platform/harbor/overlays/gcp` for the staging GKE cluster.
+# The bucket name + service account are environment-specific —
+# overridden via per-environment kustomize layer above this one (or
+# directly here for single-env deployments).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - path: gcs-patch.yaml

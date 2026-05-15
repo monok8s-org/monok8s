@@ -1,0 +1,61 @@
+---
+# SpiceDB gets its own Postgres cluster — isolated from app workload.
+# Same operator, same backup strategy, same monitoring as monok8s-app.
+# Simplification: one operator manages all database instances uniformly.
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: monok8s-spicedb
+  namespace: monok8s-platform
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: "512MB"         # SpiceDB is read-heavy — more cache
+      effective_cache_size: "1536MB"
+      random_page_cost: "1.1"         # SSD-optimised
+
+  bootstrap:
+    initdb:
+      database: spicedb
+      owner: spicedb
+      secret:
+        name: monok8s-spicedb-superuser
+
+  backup:
+    retentionPolicy: "30d"
+    barmanObjectStore:
+      destinationPath: "s3://monok8s-pgbackups/spicedb"
+      s3Credentials:
+        accessKeyId:
+          name: pg-backup-secrets
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: pg-backup-secrets
+          key: SECRET_ACCESS_KEY
+      wal:
+        compression: gzip
+
+  monitoring:
+    enablePodMonitor: true
+
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: monok8s-spicedb-rw
+  namespace: monok8s-platform
+spec:
+  cluster:
+    name: monok8s-spicedb
+  type: rw
+  instances: 2
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      max_client_conn: "500"
+      default_pool_size: "20"

@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Generated wrapper for atlas_migrate_apply_run. Substitution markers
+# use __KEY__ syntax to avoid colliding with bash ${VAR} expansion in
+# the template body. Mirrors the shape of
+# rules_atlas//private:atlas_migrate_diff_run.sh.tmpl, simpler because
+# `atlas migrate apply` doesn't need a dev_service.
+set -euo pipefail
+
+# Resolve the runfiles tree. Set under both `bazel run` (RUNFILES_DIR)
+# and `bazel test` wrapping (TEST_SRCDIR — propagates to children).
+if [[ -z "${RUNFILES_DIR:-}" ]]; then
+  if [[ -n "${TEST_SRCDIR:-}" ]]; then
+    RUNFILES_DIR="$TEST_SRCDIR"
+  elif [[ -d "${0}.runfiles" ]]; then
+    RUNFILES_DIR="${0}.runfiles"
+  elif [[ -d "$(dirname "$0").runfiles" ]]; then
+    RUNFILES_DIR="$(dirname "$0").runfiles"
+  fi
+  export RUNFILES_DIR
+fi
+
+resolve() {
+  local p="$1"
+  if [[ -e "${RUNFILES_DIR}/_main/${p}" ]]; then
+    printf '%s\n' "${RUNFILES_DIR}/_main/${p}"
+  elif [[ -e "${RUNFILES_DIR}/${p}" ]]; then
+    printf '%s\n' "${RUNFILES_DIR}/${p}"
+  else
+    echo "atlas_migrate_apply_run: input not in runfiles: ${p}" >&2
+    exit 1
+  fi
+}
+
+ATLAS="$(resolve '__ATLAS_BIN__')"
+ATLAS_CONFIG="$(resolve '__ATLAS_CONFIG__')"
+ATLAS_ENV='__ATLAS_ENV__'
+MIGRATIONS_DIR='__MIGRATIONS_DIR__'
+
+# Argument parsing. Canonical AC shape:
+#   --tenant <tenant-slug>   — required unless TENANT_DATABASE_URL pre-set.
+# Bypassable by pre-setting TENANT_DATABASE_URL (used by the L2 pg_test).
+TENANT_ID=""
+EXTRA_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --tenant)
+      [[ $# -ge 2 ]] || { echo "migrate-apply: --tenant requires a value" >&2; exit 2; }
+      TENANT_ID="$2"
+      shift 2
+      ;;
+    --) shift; EXTRA_ARGS+=("$@"); break ;;
+    *) EXTRA_ARGS+=("$1"); shift ;;
+  esac
+done
+
+if [[ -z "${TENANT_DATABASE_URL:-}" ]]; then
+  if [[ -z "$TENANT_ID" ]]; then
+    echo "migrate-apply: --tenant <tid> is required (or pre-set TENANT_DATABASE_URL)" >&2
+    exit 2
+  fi
+  # Validate tenant slug — DNS-safe (matches the XRD's pattern from #82).
+  if ! [[ "$TENANT_ID" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+    echo "migrate-apply: invalid tenant slug '$TENANT_ID' (must match ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$)" >&2
+    exit 2
+  fi
+  # In-cluster resolution: fetch the CNPG-emitted connection Secret
+  # from the tenant's namespace.
+  if ! command -v kubectl >/dev/null 2>&1; then
+    echo "migrate-apply: kubectl not on PATH and TENANT_DATABASE_URL not pre-set; cannot resolve tenant connection details" >&2
+    exit 1
+  fi
+  ns="tenant-${TENANT_ID}"
+  # The Secret name follows #82's CNPG convention:
+  # `<tenantName>-<dbName>-app`. dbName defaults to "app".
+  secret="${TENANT_ID}-app-app"
+  echo "[migrate-apply] resolving TENANT_DATABASE_URL from ${ns}/${secret}" >&2
+  TENANT_DATABASE_URL=$(kubectl -n "$ns" get secret "$secret" -o jsonpath='{.data.uri}' 2>/dev/null | base64 -d 2>/dev/null || true)
+  if [[ -z "$TENANT_DATABASE_URL" ]]; then
+    echo "migrate-apply: failed to read uri from secret ${ns}/${secret}" >&2
+    exit 1
+  fi
+fi
+export TENANT_DATABASE_URL
+
+# Atlas resolves `file://X` URLs relative to the directory containing
+# atlas.hcl. The tenant env declares `src = "file://migrations"`, so cd
+# into atlas.hcl's directory (the runfiles-tree mirror of packages/db/)
+# before invoking atlas.
+atlas_cfg_dir=$(dirname "$ATLAS_CONFIG")
+cd "$atlas_cfg_dir"
+
+echo "[migrate-apply] running atlas migrate apply (env=$ATLAS_ENV)" >&2
+exec "$ATLAS" migrate apply \
+    --config "file://$ATLAS_CONFIG" \
+    --env "$ATLAS_ENV" \
+    "${EXTRA_ARGS[@]}"

@@ -1,0 +1,16 @@
+"""Harbor platform install — base + 2 storage overlays + CNPG patches (#27)."""
+
+sh_test(
+    name = "harbor_smoke",
+    srcs = ["//platform/harbor/testdata:smoke.sh"],
+    data = [
+        "base/bootstrap.yaml",
+        "base/cluster.yaml",
+        "base/cnpg-patches.yaml",
+        "base/kustomization.yaml",
+        "overlays/baremetal/kustomization.yaml",
+        "overlays/gcp/gcs-patch.yaml",
+        "overlays/gcp/kustomization.yaml",
+    ],
+    tags = ["pure"],
+)

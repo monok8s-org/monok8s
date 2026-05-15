@@ -1,0 +1,7 @@
+exports_files(
+    [
+        "xtenant.yaml",
+        "xtenant-database.yaml",
+    ],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,28 @@
+# ConstraintTemplate: require-tenant-label.
+#
+# Gatekeeper instantiates a CRD `K8sRequiredTenantLabel` from this
+# template. The `K8sRequiredTenantLabel` Constraint (sibling file)
+# selects target resources (Namespaces) and the rego embedded here
+# decides admission. The rego logic mirrors the unit-tested
+# platform/opa/policies/require_tenant_label.rego.
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredtenantlabel
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredTenantLabel
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package monok8s.require_tenant_label
+
+        violation[{"msg": msg}] {
+          not input.review.object.metadata.labels["monok8s.io/tenant"]
+          msg := sprintf(
+            "Namespace %q must carry the monok8s.io/tenant label",
+            [input.review.object.metadata.name],
+          )
+        }

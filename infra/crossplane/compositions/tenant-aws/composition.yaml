@@ -1,0 +1,122 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: tenant-aws
+  labels:
+    monok8s.io/composition: tenant-aws
+    monok8s.io/provider: aws
+spec:
+  compositeTypeRef:
+    apiVersion: monok8s.io/v1alpha1
+    kind: XTenant
+  resources:
+
+    # Capsule namespace tenancy (cloud-agnostic base)
+    - name: capsule-tenant
+      base:
+        apiVersion: capsule.clastix.io/v1beta2
+        kind: Tenant
+        spec:
+          owners:
+            - kind: ServiceAccount
+              name: crossplane-system
+          namespaceOptions:
+            quota: 3
+          resourceQuota:
+            - hard:
+                limits.cpu: "4"
+                limits.memory: 8Gi
+      patches:
+        - fromFieldPath: spec.tenantId
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "tenant-%s"
+
+    # S3 bucket for tenant object storage
+    # Tagged managed-by=monok8s-crossplane — write-back CloudTrail filter excludes these.
+    - name: tenant-bucket
+      base:
+        apiVersion: s3.aws.upbound.io/v1beta1
+        kind: Bucket
+        spec:
+          forProvider:
+            region: us-east-1
+            tags:
+              managed-by: monok8s-crossplane
+              monok8s.io/managed: "true"
+              monok8s.io/resource-type: tenant
+      patches:
+        - fromFieldPath: spec.tenantId
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "monok8s-tenant-%s"
+        - fromFieldPath: spec.tenantId
+          toFieldPath: spec.forProvider.tags["monok8s.io/tenant-id"]
+        - fromFieldPath: spec.tenantId
+          toFieldPath: spec.forProvider.tags["monok8s.io/resource-id"]
+
+    - name: tenant-bucket-sse
+      base:
+        apiVersion: s3.aws.upbound.io/v1beta1
+        kind: BucketServerSideEncryptionConfiguration
+        spec:
+          forProvider:
+            region: us-east-1
+            rule:
+              - applyServerSideEncryptionByDefault:
+                  - sseAlgorithm: aws:kms
+      patches:
+        - fromFieldPath: spec.tenantId
+          toFieldPath: spec.forProvider.bucketSelector.matchLabels["monok8s-tenant-id"]
+
+    # IAM Identity Center permission set assignments
+    # One assignment per group synced from Zitadel via SCIM.
+    # Group naming convention: monok8s-<tenant_id>-<role>
+    # Permission set naming convention: monok8s-<role>  (created by Terraform bootstrap)
+    #
+    # Crossplane AWS provider reconciles these assignments.
+    # The Crossplane IRSA role is excluded from the EventBridge write-back filter
+    # so these assignments don't trigger a write-back loop.
+    - name: permission-set-assignment-admin
+      base:
+        apiVersion: ssoadmin.aws.upbound.io/v1beta1
+        kind: AccountAssignment
+        spec:
+          forProvider:
+            region: us-east-1
+            permissionSetArnSelector:
+              matchLabels:
+                monok8s.io/role: admin
+            principalType: GROUP
+      patches:
+        - fromFieldPath: spec.tenantId
+          toFieldPath: spec.forProvider.principalId
+          # In practice, the group ID would be looked up via a Crossplane function;
+          # shown here as a direct patch for clarity.
+          transforms:
+            - type: string
+              string:
+                fmt: "monok8s-%s-admin"
+
+    - name: permission-set-assignment-member
+      base:
+        apiVersion: ssoadmin.aws.upbound.io/v1beta1
+        kind: AccountAssignment
+        spec:
+          forProvider:
+            region: us-east-1
+            permissionSetArnSelector:
+              matchLabels:
+                monok8s.io/role: member
+            principalType: GROUP
+      patches:
+        - fromFieldPath: spec.tenantId
+          toFieldPath: spec.forProvider.principalId
+          transforms:
+            - type: string
+              string:
+                fmt: "monok8s-%s-member"

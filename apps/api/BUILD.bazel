@@ -1,0 +1,464 @@
+load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
+load("@aspect_rules_jest//jest:defs.bzl", "jest_test")
+load("@aspect_rules_js//js:defs.bzl", "js_binary")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config", "ts_project")
+load("@rules_nats//:defs.bzl", "nats_server")
+load("@rules_pg//:defs.bzl", "pg_server", "postgres_schema")
+load("//tools/bazel:itest.bzl", "itest_suite")
+load("//tools/bazel:oci.bzl", "app_image")
+
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    deps = ["//:tsconfig"],
+)
+
+# Routers under src/routers/{installations,marketplace}.ts are scaffolded
+# ahead of their owning Issues (#87 principal mutation procedures,
+# #90 CLI scaffold). They reference context fields (`ctx.temporal`,
+# `ctx.gcpMarketplaceTokenVerified`, etc.) that don't exist on the
+# Context shape until those Issues land. The auth middleware (#89) now
+# lives in //packages/auth as middleware.ts; apps/api consumes it via
+# @monok8s/auth. system.ts stays in (no @monok8s/* dep).
+ts_project(
+    name = "lib",
+    srcs = glob(
+        ["src/**/*.ts"],
+        exclude = [
+            "src/**/*.test.ts",
+            "src/routers/installations.ts",
+            "src/routers/marketplace.ts",
+        ],
+    ),
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        "//:node_modules/@temporalio/client",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/@types/node",
+        "//:node_modules/@types/pg",
+        "//:node_modules/nats",
+        "//:node_modules/pg",
+        "//:node_modules/zod",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+)
+
+# Compiled test sources — separated from :lib so production builds
+# don't pull in @jest/globals transitively.
+ts_project(
+    name = "lib_test",
+    srcs = glob(["src/**/*.test.ts"]),
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        ":lib",
+        "//:node_modules/@jest/globals",
+        "//:node_modules/@temporalio/client",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/@types/jest",
+        "//:node_modules/@types/node",
+        "//:node_modules/jest",
+        "//:node_modules/nats",
+        "//:node_modules/zod",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+)
+
+# L1 unit tests for the principal read procedures (#87a). Pure DI
+# via the test seams from packages/auth's middleware module.
+jest_test(
+    name = "principals_unit_test",
+    config = ":jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@authzed/authzed-node",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/babel-jest",
+        "//:node_modules/pg",
+        "//:node_modules/zod",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)
+
+# L1 unit tests for the Zitadel OIDC BFF (#191 / #91 Phase B).
+# Pure logic: each handler takes injected fetcher + verifier so the
+# tests run hermetic (no Zitadel, no network).
+jest_test(
+    name = "auth_unit_test",
+    config = ":jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@authzed/authzed-node",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/babel-jest",
+        "//:node_modules/pg",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)
+
+# L1 unit tests for the tRPC subscription router (#88a). Smoke-imports
+# the router + asserts the shape; deeper coverage is the L2 itest.
+jest_test(
+    name = "events_unit_test",
+    config = ":jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@authzed/authzed-node",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/babel-jest",
+        "//:node_modules/nats",
+        "//:node_modules/pg",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)
+
+# L1 unit tests for the tenants router + handler (#29). DI-friendly:
+# handler takes a deps bag (db, temporal, newId, canCreate) so tests
+# stub the WorkflowClient + SpiceDB check + INSERT path. Schema tests
+# exercise the wire-boundary invariants directly via safeParse.
+jest_test(
+    name = "tenants_unit_test",
+    config = ":jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@authzed/authzed-node",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/@temporalio/client",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/babel-jest",
+        "//:node_modules/pg",
+        "//:node_modules/zod",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)
+
+# L1 unit tests for the grants router + handler (#224). DI-friendly:
+# handler takes a deps bag (temporal, now, newId) so tests stub the
+# WorkflowClient + fix the clock. Schema tests exercise the wire-
+# boundary invariants directly via safeParse.
+jest_test(
+    name = "grants_unit_test",
+    config = ":jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@authzed/authzed-node",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/@temporalio/client",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/babel-jest",
+        "//:node_modules/pg",
+        "//:node_modules/zod",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)
+
+# L1 unit tests for the Temporal Client bootstrap (#222). Pure: every
+# test passes through resolveTemporalConfig (pure parse) or injects a
+# stub WorkflowClient via _setTemporalClient_TESTING — no real
+# Temporal gRPC dial happens in the unit tier.
+jest_test(
+    name = "temporal_unit_test",
+    config = ":jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@authzed/authzed-node",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/@temporalio/client",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/babel-jest",
+        "//:node_modules/pg",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)
+
+# L1 unit tests for the audit router handlers (#208 list + the
+# existing #197 pingAudit cases). audit.test.ts wasn't wired to a
+# jest_test target until #208 added the list handler — the file lived
+# under the lib_test glob but no runner picked it up.
+jest_test(
+    name = "audit_unit_test",
+    config = ":jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@authzed/authzed-node",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/babel-jest",
+        "//:node_modules/pg",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)
+
+copy_to_bin(
+    name = "jest_config",
+    srcs = ["jest.config.js"],
+)
+
+# ── L2 itest: tenant.events SSE delivery within 1s (#88a AC) ─────────
+# Re-introduced via #178 once the cross-package ESM resolution gap
+# (Discussion #45 Gap 25) was closed by tools/bazel/monok8s-esm-loader.mjs
+# plus the project-wide `.js`-extension hygiene sweep.
+
+nats_server(
+    name = "events_nats",
+    tags = ["manual"],
+)
+
+ts_project(
+    name = "events_l2_test_lib",
+    srcs = ["test/events_l2_test.ts"],
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        ":lib",
+        "//:node_modules/@trpc/client",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/@types/node",
+        "//:node_modules/nats",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+)
+
+sh_binary(
+    name = "events_l2_test_sh",
+    srcs = ["test/events_l2_test.sh"],
+    data = [
+        ":events_l2_test_lib",
+        ":lib",
+        "//:node_modules/@trpc/client",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/nats",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+        "//tools/bazel:monok8s_esm_loader",
+    ],
+    tags = ["manual"],
+)
+
+itest_suite(
+    name = "events_l2_test",
+    servers = {"nats": ":events_nats"},
+    tags = ["impure"],
+    test = ":events_l2_test_sh",
+)
+
+# ── L2 itest: workflow.events SSE delivery within 1s (#88b AC / #177) ──
+# Mirrors events_l2_test but exercises the workflow procedure with a
+# tnt-<tid>- prefixed workflowId. Reuses the same nats_server target
+# (events_nats) — itest_suite brings up a fresh instance per test run.
+
+nats_server(
+    name = "workflow_events_nats",
+    tags = ["manual"],
+)
+
+ts_project(
+    name = "events_workflow_l2_test_lib",
+    srcs = ["test/events_workflow_l2_test.ts"],
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        ":lib",
+        "//:node_modules/@trpc/client",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/@types/node",
+        "//:node_modules/nats",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+)
+
+sh_binary(
+    name = "events_workflow_l2_test_sh",
+    srcs = ["test/events_workflow_l2_test.sh"],
+    data = [
+        ":events_workflow_l2_test_lib",
+        ":lib",
+        "//:node_modules/@trpc/client",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/nats",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+        "//tools/bazel:monok8s_esm_loader",
+    ],
+    tags = ["manual"],
+)
+
+itest_suite(
+    name = "events_workflow_l2_test",
+    servers = {"nats": ":workflow_events_nats"},
+    tags = ["impure"],
+    test = ":events_workflow_l2_test_sh",
+)
+
+# ── L2 itest: events.audit SSE delivery + audit_log row insert (#179 / #88c) ──
+# Two backends: pg (audit_log INSERT via the production emitter) +
+# nats (audit envelope publish + SSE-fanout subscription). Migration
+# 008 ships with the test as a runfile; the launcher passes the path
+# via MONOK8S_AUDIT_LOG_SQL so the test driver applies the DDL at
+# startup (separate from packages/db's :schema target which only
+# includes 001+002 today per Gap 19).
+
+nats_server(
+    name = "audit_events_nats",
+    tags = ["manual"],
+)
+
+postgres_schema(
+    name = "_audit_l2_empty_schema",
+    srcs = [],
+)
+
+pg_server(
+    name = "audit_pg",
+    schema = ":_audit_l2_empty_schema",
+    tags = ["manual"],
+)
+
+ts_project(
+    name = "events_audit_l2_test_lib",
+    srcs = ["test/events_audit_l2_test.ts"],
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        ":lib",
+        "//:node_modules/@trpc/client",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/@types/node",
+        "//:node_modules/@types/pg",
+        "//:node_modules/nats",
+        "//:node_modules/pg",
+        "//packages/auth:lib",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+)
+
+sh_binary(
+    name = "events_audit_l2_test_sh",
+    srcs = ["test/events_audit_l2_test.sh"],
+    data = [
+        ":events_audit_l2_test_lib",
+        ":lib",
+        "//:node_modules/@trpc/client",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/nats",
+        "//:node_modules/pg",
+        "//packages/auth:lib",
+        "//packages/db:audit_log_migration",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+        "//tools/bazel:monok8s_esm_loader",
+    ],
+    tags = ["manual"],
+)
+
+itest_suite(
+    name = "events_audit_l2_test",
+    servers = {
+        "nats": ":audit_events_nats",
+        "pg": ":audit_pg",
+    },
+    tags = [
+        "impure",
+        "nats",
+        "pg",
+    ],
+    test = ":events_audit_l2_test_sh",
+)
+
+js_binary(
+    name = "bin",
+    # aspect_rules_js's js_binary takes the compiled artifacts via
+    # `data` (runfiles), not `deps` (which doesn't exist on this rule
+    # in v3.x). The `:lib` target's ts_project output is the
+    # JavaScript runfiles that the entry_point references.
+    data = [":lib"],
+    entry_point = "src/index.js",
+)
+
+app_image(
+    name = "image",
+    binary = ":bin",
+    language = "node",
+    description = "monok8s API service",
+)

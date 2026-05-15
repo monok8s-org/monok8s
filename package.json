@@ -1,0 +1,51 @@
+{
+  "name": "monok8s",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-env": "^7.29.5",
+    "@babel/preset-typescript": "^7.28.5",
+    "@jest/globals": "^30.4.1",
+    "@testing-library/jest-dom": "^6.4.0",
+    "@testing-library/user-event": "^14.5.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.6.2",
+    "@types/pg": "^8.11.0",
+    "babel-jest": "^30.0.0",
+    "babel-preset-solid": "^1.8.0",
+    "esbuild": "^0.21.0",
+    "esbuild-plugin-babel": "^0.2.3",
+    "jest": "^30.0.0",
+    "jest-cli": "^30.4.2",
+    "jest-environment-jsdom": "^30.0.0",
+    "jest-junit": "^17.0.0",
+    "typescript": "^5.4.0",
+    "vite": "^5.2.0",
+    "vite-plugin-solid": "^2.10.0"
+  },
+  "dependencies": {
+    "@authzed/authzed-node": "^0.18.0",
+    "@monok8s/trpc": "workspace:*",
+    "@opentelemetry/exporter-metrics-otlp-grpc": "^0.217.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.217.0",
+    "@opentelemetry/sdk-node": "^0.217.0",
+    "@solidjs/meta": "^0.29.0",
+    "@solidjs/router": "^0.13.0",
+    "@solidjs/testing-library": "^0.8.0",
+    "@temporalio/client": "^1.11.0",
+    "@trpc/client": "^11.0.0",
+    "@trpc/server": "^11.0.0",
+    "jose": "^6.2.3",
+    "minio": "^8.0.7",
+    "nats": "^2.29.0",
+    "pg": "^8.13.0",
+    "solid-js": "^1.8.0",
+    "zod": "^3.23.0"
+  }
+}

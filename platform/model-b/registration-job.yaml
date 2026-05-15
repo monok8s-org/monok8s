@@ -1,0 +1,89 @@
+# Registration Job — run once on Model B after obtaining a bootstrap token
+# from the Model A admin UI.
+#
+# Usage:
+#   kubectl create secret generic model-a-bootstrap \
+#     --from-literal=token=<bootstrap_token> \
+#     --from-literal=installation_id=<installation_id> \
+#     --from-literal=model_a_url=https://api.monok8s.io \
+#     -n monok8s-platform
+#
+#   kubectl apply -f platform/model-b/registration-job.yaml
+#
+# On success the Job writes the `model-a-registration` Secret containing:
+#   INSTALLATION_ID, INSTALLATION_API_KEY, MODEL_A_API_URL, VAULT_ADDR
+# and writes the initial client cert into `installation-client-cert`.
+# cert-manager takes over rotation after this point.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: model-a-registration
+  namespace: monok8s-platform
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: model-a-registration
+      containers:
+        - name: register
+          image: harbor.monok8s.internal/monok8s/model-b-cli
+          command:
+            - /bin/monok8s-cli
+            - register
+            - --bootstrap-token=$(BOOTSTRAP_TOKEN)
+            - --installation-id=$(INSTALLATION_ID)
+            - --model-a-url=$(MODEL_A_URL)
+            - --host-cloud=$(HOST_CLOUD)
+            - --write-secret=model-a-registration
+            - --write-cert-secret=installation-client-cert
+            - --namespace=monok8s-platform
+          env:
+            - name: BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: model-a-bootstrap
+                  key: token
+            - name: INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: model-a-bootstrap
+                  key: installation_id
+            - name: MODEL_A_URL
+              valueFrom:
+                secretKeyRef:
+                  name: model-a-bootstrap
+                  key: model_a_url
+            - name: HOST_CLOUD
+              value: "bare-metal"   # override per host
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: model-a-registration
+  namespace: monok8s-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: model-a-registration
+  namespace: monok8s-platform
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, get, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: model-a-registration
+  namespace: monok8s-platform
+subjects:
+  - kind: ServiceAccount
+    name: model-a-registration
+roleRef:
+  kind: Role
+  name: model-a-registration
+  apiGroup: rbac.authorization.k8s.io

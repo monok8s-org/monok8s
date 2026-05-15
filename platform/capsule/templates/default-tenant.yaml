@@ -1,0 +1,79 @@
+# Default Capsule Tenant for monok8s customer namespaces.
+#
+# Capsule treats each Tenant as a soft-multi-tenancy boundary: namespaces
+# matching the tenant's label selector inherit the Tenant's quotas,
+# NetworkPolicy, and LimitRange. Per-tenant XRs (XTenant from #13) emit
+# Namespaces with `capsule.clastix.io/tenant: customer-tenants` (see
+# infra/crossplane/compositions/tenant-namespace/composition.yaml) which
+# pulls them under this Tenant.
+#
+# Three pieces per AC#3:
+#   • ResourceQuota — hard caps on cpu/memory/pods per tenant namespace
+#   • NetworkPolicy — default-deny intra-tenant traffic
+#   • LimitRange    — sane container defaults (request/limit)
+#
+# Any of these can be overridden per-namespace by an explicit child
+# resource. Capsule's controller reconciles the Tenant's items into each
+# member namespace.
+apiVersion: capsule.clastix.io/v1beta2
+kind: Tenant
+metadata:
+  name: customer-tenants
+  labels:
+    monok8s.io/managed-by: platform
+spec:
+  owners:
+    - kind: Group
+      name: tenants
+  namespaceOptions:
+    additionalMetadataList:
+      - namespaceSelector:
+          matchLabels:
+            capsule.clastix.io/tenant: customer-tenants
+        labels:
+          monok8s.io/managed-by: platform
+
+  resourceQuotas:
+    scope: Tenant
+    items:
+      - hard:
+          requests.cpu: "8"
+          requests.memory: 16Gi
+          limits.cpu: "16"
+          limits.memory: 32Gi
+          persistentvolumeclaims: "10"
+          requests.storage: 100Gi
+          pods: "100"
+
+  limitRanges:
+    items:
+      - limits:
+          - type: Container
+            default:
+              cpu: 500m
+              memory: 512Mi
+            defaultRequest:
+              cpu: 100m
+              memory: 128Mi
+            max:
+              cpu: "4"
+              memory: 8Gi
+            min:
+              cpu: 10m
+              memory: 16Mi
+
+  networkPolicies:
+    items:
+      # Default-deny intra-tenant: every namespace under this Tenant
+      # blocks all ingress except from same-namespace pods + the
+      # platform's API service. Egress unrestricted (CNI policies in
+      # #19 lock down per-tenant egress separately).
+      - podSelector: {}
+        policyTypes:
+          - Ingress
+        ingress:
+          - from:
+              - podSelector: {}
+              - namespaceSelector:
+                  matchLabels:
+                    monok8s.io/managed-by: platform

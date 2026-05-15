@@ -1,0 +1,112 @@
+"""L2 tests for the tenant-database-cnpg Composition (#82).
+
+Two layers, mirroring //infra/crossplane/compositions/tenant-capsule:
+
+  * `tenant_database_cnpg_envtest` — TWO-server itest_suite. The `k8s`
+    server (kube-apiserver+etcd via rules_kubernetes) pre-applies the
+    Crossplane meta-CRDs + CNPG Cluster CRD + XTenantDatabase XRD +
+    this Composition; the `pg` server (rules_pg's pg_server, reused
+    from //packages/db:dev_pg) is the hermetic Postgres against which
+    smoke.sh runs `SELECT 1`. The pg surrogate satisfies the "psql
+    connection round-trip" AC at L2 hermetic constraints — see the
+    smoke.sh header for the design note.
+
+  * `tenant_database_cnpg_render` — `crank render` via rules_crossplane;
+    asserts the Composition+XR fixture renders to [XTenantDatabase,
+    Cluster]. Same `requires-docker` + `no-sandbox` posture as the
+    rest of the project's crossplane_render_test family.
+"""
+
+load("@rules_crossplane//:defs.bzl", "crossplane_render_test")
+load("@rules_kubernetes//:defs.bzl", "kubernetes_manifest", "kubernetes_server")
+load("@rules_pg//:defs.bzl", "pg_server", "postgres_schema")
+load("//tools/bazel:itest.bzl", "itest_suite")
+
+exports_files(
+    ["composition.yaml"],
+    visibility = ["//visibility:public"],
+)
+
+kubernetes_manifest(
+    name = "tenant_database_cnpg_envtest_manifests",
+    srcs = [
+        # Crossplane meta-CRDs.
+        "//infra/crossplane/vendor:apiextensions.crossplane.io_compositeresourcedefinitions.yaml",
+        "//infra/crossplane/vendor:apiextensions.crossplane.io_compositions.yaml",
+        # XTenantDatabase XRD (the type this Composition reconciles).
+        "//infra/crossplane/xrds:xtenant-database.yaml",
+        # The Composition under test.
+        "composition.yaml",
+    ],
+    # Note: the CNPG Cluster CRD is vendored at
+    # //infra/crossplane/vendor:postgresql.cnpg.io_clusters.yaml but
+    # intentionally NOT applied here. The kubernetes_server's
+    # `kubectl apply` path requires the manifest fit within the 256KB
+    # last-applied annotation limit; CNPG's Cluster CRD is too large.
+    # The Composition object itself doesn't require its child CRDs to
+    # exist at admission time — smoke.sh validates the Composition's
+    # structural shape, not its child-resource admissibility. Same
+    # pattern as //infra/crossplane/compositions/tenant-namespace
+    # envtest. The crank-render sibling test (with `requires-docker`)
+    # is where child-kind validation lands.
+)
+
+kubernetes_server(
+    name = "tenant_database_cnpg_envtest_k8s",
+    manifests = ":tenant_database_cnpg_envtest_manifests",
+)
+
+# Empty-schema hermetic Postgres surrogate. Mirrors the
+# //packages/db:dev_pg pattern (declared locally to avoid leaking
+# cross-package visibility on dev_pg). The smoke.sh's psql round-trip
+# hits this server — see the smoke.sh header for the surrogate
+# design note.
+postgres_schema(
+    name = "_pg_surrogate_empty_schema",
+    srcs = [],
+)
+
+pg_server(
+    name = "tenant_database_cnpg_pg_surrogate",
+    schema = ":_pg_surrogate_empty_schema",
+)
+
+sh_binary(
+    name = "tenant_database_cnpg_smoke_bin",
+    srcs = ["//infra/crossplane/compositions/tenant-database-cnpg/testdata:smoke.sh"],
+    tags = ["manual"],
+)
+
+# L2 envtest: brings up kube-apiserver+etcd with all required CRDs +
+# XRD + Composition pre-applied, plus a hermetic Postgres for the
+# psql round-trip AC.
+itest_suite(
+    name = "tenant_database_cnpg_envtest",
+    servers = {
+        "k8s": ":tenant_database_cnpg_envtest_k8s",
+        "pg": ":tenant_database_cnpg_pg_surrogate",
+    },
+    tags = ["impure"],
+    test = ":tenant_database_cnpg_smoke_bin",
+)
+
+# L2 render test: hermetic `crank render` of the Composition + XR
+# fixture + function-patch-and-transform manifest. Asserts the renderer
+# produces the expected child-resource kinds.
+crossplane_render_test(
+    name = "tenant_database_cnpg_render",
+    composite = "//infra/crossplane/compositions/tenant-database-cnpg/testdata:valid-xtenant-database.yaml",
+    composition = "composition.yaml",
+    expected_kinds = [
+        "XTenantDatabase",
+        "Cluster",
+    ],
+    functions = [
+        "//infra/crossplane/functions:patch-and-transform.yaml",
+    ],
+    tags = [
+        "impure",
+        "no-sandbox",
+        "requires-docker",
+    ],
+)

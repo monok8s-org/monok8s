@@ -1,0 +1,1 @@
+exports_files(["smoke.sh"], visibility = ["//platform/tekton:__pkg__"])

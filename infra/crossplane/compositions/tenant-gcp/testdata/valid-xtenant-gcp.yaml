@@ -1,0 +1,13 @@
+# Test fixture: a GCP-flavored XTenant (compositionSelector matches the
+# tenant-gcp Composition's monok8s.io/provider=gcp label).
+# Used by the L2 envtest + crossplane_render_test for the GCP overlay.
+apiVersion: monok8s.io/v1alpha1
+kind: XTenant
+metadata:
+  name: acme-gcp
+spec:
+  name: acme
+  postgresVersion: "16"
+  compositionSelector:
+    matchLabels:
+      monok8s.io/provider: gcp

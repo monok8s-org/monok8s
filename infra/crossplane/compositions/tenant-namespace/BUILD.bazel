@@ -1,0 +1,86 @@
+"""L2 tests for the tenant-namespace Composition (#14).
+
+Two layers:
+
+  * `tenant_namespace_envtest` — kube-apiserver+etcd via rules_kubernetes;
+    asserts admission + structural shape against Crossplane v2.2.1
+    meta-CRDs.
+  * `tenant_namespace_render` — `crank render` via rules_crossplane;
+    asserts the Composition+XR fixture renders to the expected child
+    kinds. No cluster needed; closes Discussion #45 Gap 19.
+"""
+
+load("@rules_crossplane//:defs.bzl", "crossplane_render_test")
+load("@rules_kubernetes//:defs.bzl", "kubernetes_manifest", "kubernetes_server")
+load("//tools/bazel:itest.bzl", "itest_suite")
+
+exports_files(
+    ["composition.yaml"],
+    visibility = ["//visibility:public"],
+)
+
+kubernetes_manifest(
+    name = "tenant_namespace_envtest_manifests",
+    srcs = [
+        # Crossplane meta-CRDs.
+        "//infra/crossplane/vendor:apiextensions.crossplane.io_compositeresourcedefinitions.yaml",
+        "//infra/crossplane/vendor:apiextensions.crossplane.io_compositions.yaml",
+        # XTenant XRD (the type this Composition reconciles).
+        "//infra/crossplane/xrds:xtenant.yaml",
+        # The Composition under test.
+        "composition.yaml",
+    ],
+)
+
+kubernetes_server(
+    name = "tenant_namespace_envtest_k8s",
+    manifests = ":tenant_namespace_envtest_manifests",
+)
+
+sh_binary(
+    name = "tenant_namespace_smoke_bin",
+    srcs = ["//infra/crossplane/compositions/tenant-namespace/testdata:smoke.sh"],
+    tags = ["manual"],
+)
+
+# L2 envtest: brings up kube-apiserver+etcd with the Crossplane meta-CRDs
+# + XTenant XRD + tenant-namespace Composition pre-applied, then asserts
+# the Composition is admitted and structurally well-formed (right
+# compositeTypeRef, right resource list).
+itest_suite(
+    name = "tenant_namespace_envtest",
+    servers = {
+        "k8s": ":tenant_namespace_envtest_k8s",
+    },
+    test = ":tenant_namespace_smoke_bin",
+)
+
+# L2 render test: hermetic `crank render` of the Composition + XR fixture
+# + function-patch-and-transform manifest. Asserts the renderer produces
+# the expected child-resource kinds. Closes Discussion #45 Gap 19.
+#
+# `requires-docker` + `no-sandbox` per the rules_crossplane contract:
+# composition functions execute via Docker (crank's own contract). The
+# tag is already accepted under Hermeticity Discussion #4 Gap 2 (kind
+# requires host Docker — same posture).
+crossplane_render_test(
+    name = "tenant_namespace_render",
+    composite = "//infra/crossplane/xrds/testdata:valid-xtenant.yaml",
+    composition = "composition.yaml",
+    functions = [
+        "//infra/crossplane/functions:patch-and-transform.yaml",
+    ],
+    expected_kinds = [
+        "XTenant",
+        "Namespace",
+        "Cluster",
+        "Policy",
+        "AuthBackendRole",
+        "ExternalSecret",
+    ],
+    tags = [
+        "impure",
+        "no-sandbox",
+        "requires-docker",
+    ],
+)

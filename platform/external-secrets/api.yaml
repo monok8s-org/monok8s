@@ -1,0 +1,25 @@
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: api-secrets
+  namespace: monok8s-prod
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: api-secrets
+  data:
+    - secretKey: DATABASE_URL
+      remoteRef:
+        key: database/creds/monok8s-api
+        property: connection_string
+    - secretKey: ZITADEL_ISSUER
+      remoteRef:
+        key: secret/data/monok8s/api/zitadel
+        property: issuer
+    - secretKey: SPICEDB_TOKEN
+      remoteRef:
+        key: secret/data/monok8s/api/spicedb
+        property: preshared_key

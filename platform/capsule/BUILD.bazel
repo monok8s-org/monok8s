@@ -1,0 +1,16 @@
+"""Capsule bootstrap + default-tenant template shape smoke (#17)."""
+
+exports_files(
+    ["bootstrap.yaml"],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "capsule_smoke",
+    srcs = ["//platform/capsule/testdata:smoke.sh"],
+    data = [
+        "bootstrap.yaml",
+        "templates/default-tenant.yaml",
+    ],
+    tags = ["pure"],
+)

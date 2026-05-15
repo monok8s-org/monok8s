@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monok8s-worker-onboarding
+  labels:
+    app: monok8s-worker-onboarding
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monok8s-worker-onboarding
+  template:
+    metadata:
+      labels:
+        app: monok8s-worker-onboarding
+    spec:
+      serviceAccountName: monok8s-worker-onboarding
+      containers:
+        - name: worker
+          image: harbor.monok8s.internal/monok8s/onboarding:latest
+          # IfNotPresent so kind / podman-loaded images via
+          # `oci_load` tarballs (per `app_image` macro) take precedence
+          # over a Harbor pull. With Tekton-emitted digest-pinned
+          # overlays the behavior is identical; only mutable `:latest`
+          # would have been affected by the implicit Always default.
+          imagePullPolicy: IfNotPresent
+          env:
+            # Temporal — apps/workers/onboarding/run.go reads
+            # TEMPORAL_ADDRESS + TEMPORAL_NAMESPACE.
+            - name: TEMPORAL_ADDRESS
+              value: temporal.temporal.svc.cluster.local:7233
+            - name: TEMPORAL_NAMESPACE
+              value: default
+            # NATS — activities_emit.go + activities_argo.go +
+            # activities_cleanup.go read NATS_URL.
+            - name: NATS_URL
+              value: nats://nats.nats.svc.cluster.local:4222
+            # No KUBECONFIG set → activities_xr.go falls through to
+            # the in-cluster ServiceAccount loader. ServiceAccount
+            # auth is mounted at /var/run/secrets/kubernetes.io/...
+          resources:
+            # Sized for OnboardTenantWorkflow's activity timeouts
+            # (StartToCloseTimeout: 5min per workflow.go). Single
+            # replica + low baseline; KEDA scaling deferred.
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi

@@ -1,0 +1,28 @@
+# Zitadel platform component — install + CNPG cluster + bootstrap Job.
+# Sync ordering:
+#   wave 0 — cnpg + cert-manager (deps)
+#   wave 1 — Zitadel (this app), spicedb (sibling)
+#   wave 2 — temporal
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: zitadel
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: monok8s
+  source:
+    repoURL: https://github.com/monok8s-org/monok8s-dev
+    targetRevision: main
+    path: platform/zitadel
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: zitadel
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

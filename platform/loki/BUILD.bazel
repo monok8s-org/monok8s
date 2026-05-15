@@ -1,0 +1,8 @@
+"""loki bootstrap shape smoke (#25)."""
+
+sh_test(
+    name = "loki_smoke",
+    srcs = ["//platform/loki/testdata:smoke.sh"],
+    data = ["bootstrap.yaml"],
+    tags = ["pure"],
+)

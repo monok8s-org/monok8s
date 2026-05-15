@@ -1,0 +1,105 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: telemetry-gateway
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-gateway
+  namespace: telemetry-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: telemetry-gateway
+  template:
+    metadata:
+      labels:
+        app: telemetry-gateway
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "telemetry-gateway"
+        # Server TLS cert (for HTTPS to Model B)
+        vault.hashicorp.com/agent-inject-secret-tls.crt: "pki/installations/issue/server"
+        vault.hashicorp.com/agent-inject-secret-tls.key: "pki/installations/issue/server"
+    spec:
+      serviceAccountName: telemetry-gateway
+      containers:
+        - name: gateway
+          image: harbor.monok8s.internal/monok8s/telemetry-gateway
+          ports:
+            - containerPort: 8443
+              name: https
+            - containerPort: 8080
+              name: http   # healthz only
+          env:
+            - name: MIMIR_URL
+              value: http://mimir.monok8s-platform:9009
+            - name: LOKI_URL
+              value: http://loki.monok8s-platform:3100
+            - name: OTLP_URL
+              value: http://otel-collector.monok8s-platform:4318
+            - name: TLS_CERT_FILE
+              value: /vault/secrets/tls.crt
+            - name: TLS_KEY_FILE
+              value: /vault/secrets/tls.key
+            - name: CA_CERT_FILE
+              value: /etc/tls/ca.crt       # installation CA — validates client certs
+          volumeMounts:
+            - name: installation-ca
+              mountPath: /etc/tls
+              readOnly: true
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8443, scheme: HTTPS }
+            initialDelaySeconds: 5
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8443, scheme: HTTPS }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+      volumes:
+        - name: installation-ca
+          secret:
+            secretName: installation-ca-cert   # provisioned by platform/vault/pki/installations.yaml
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: telemetry-gateway
+  namespace: telemetry-gateway
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: telemetry-gateway
+  namespace: telemetry-gateway
+spec:
+  selector:
+    app: telemetry-gateway
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+---
+# Gateway API HTTPRoute — exposes telemetry-gateway at telemetry.monok8s.io
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: telemetry-gateway
+  namespace: telemetry-gateway
+spec:
+  parentRefs:
+    - name: monok8s-gateway
+      namespace: monok8s-platform
+  hostnames:
+    - telemetry.monok8s.io
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1/
+      backendRefs:
+        - name: telemetry-gateway
+          port: 443

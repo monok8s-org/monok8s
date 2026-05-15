@@ -1,0 +1,197 @@
+# tenant-capsule — per-tenant Capsule Tenant CR + namespace + per-tenant
+# policy defaults. The Capsule-isolation slice of the tenant-create flow
+# per Discussion #76 ("A Capsule tenant CR owning a dedicated K8s
+# namespace") and Issue #81.
+#
+# Composition selection: XR picks this Composition via
+# `compositionSelector.matchLabels: { monok8s.io/provider: capsule }`,
+# matching the existing per-provider convention used by tenant-aws /
+# tenant-gcp / tenant-azure.
+#
+# Three resources:
+#   1. Capsule Tenant CR — one per XR, replacing the shared
+#      `customer-tenants` Tenant CR pattern in
+#      `platform/capsule/templates/default-tenant.yaml` for XRs that
+#      opt into per-tenant isolation. Hardcoded ResourceQuota +
+#      LimitRange + NetworkPolicy defaults match the customer-tenants
+#      template; no XRD spec fields for per-tenant policy
+#      customization in this Issue's scope.
+#   2. Namespace — labeled `capsule.clastix.io/tenant: tenant-<name>`
+#      (per-tenant pointer, NOT shared `customer-tenants`). Pulled
+#      under the Tenant CR's selector.
+#   3. CiliumNetworkPolicy — per-tenant L7-capable lateral-isolation
+#      policy. Default-deny ingress from other tenants; allow
+#      same-namespace + Cilium-managed cluster services. Capsule's
+#      networkPolicies field materializes stock K8s NetworkPolicies
+#      already; the Cilium policy adds L7 identity-aware rules on top.
+#
+# This Composition is the Capsule slice ONLY — CNPG + Vault + ExternalSecret
+# stay on the legacy tenant-namespace trunk for now. Crossplane v2
+# pipeline-mode composition that combines all slices is a separate Issue.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: tenant-capsule
+  labels:
+    monok8s.io/composition: tenant-capsule
+    monok8s.io/provider: capsule
+spec:
+  compositeTypeRef:
+    apiVersion: monok8s.io/v1alpha1
+    kind: XTenant
+
+  mode: Pipeline
+
+  pipeline:
+    - step: patch-and-transform
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+
+          # ---------------------------------------------------------
+          # 1. Capsule Tenant CR — per-tenant. Replaces the shared
+          #    `customer-tenants` pattern for opt-in tenants.
+          # ---------------------------------------------------------
+          - name: capsule-tenant
+            base:
+              apiVersion: capsule.clastix.io/v1beta2
+              kind: Tenant
+              spec:
+                owners:
+                  - kind: ServiceAccount
+                    name: crossplane-system
+                    namespace: crossplane-system
+                namespaceOptions:
+                  additionalMetadataList:
+                    - namespaceSelector:
+                        matchLabels:
+                          monok8s.io/managed-by: crossplane
+                      labels:
+                        monok8s.io/managed-by: platform
+                resourceQuotas:
+                  scope: Tenant
+                  items:
+                    - hard:
+                        requests.cpu: "8"
+                        requests.memory: 16Gi
+                        limits.cpu: "16"
+                        limits.memory: 32Gi
+                        persistentvolumeclaims: "10"
+                        requests.storage: 100Gi
+                        pods: "100"
+                limitRanges:
+                  items:
+                    - limits:
+                        - type: Container
+                          default:
+                            cpu: 500m
+                            memory: 512Mi
+                          defaultRequest:
+                            cpu: 100m
+                            memory: 128Mi
+                          max:
+                            cpu: "4"
+                            memory: 8Gi
+                          min:
+                            cpu: 10m
+                            memory: 16Mi
+                networkPolicies:
+                  items:
+                    # Default-deny intra-tenant: every namespace under
+                    # this Tenant blocks all ingress except from
+                    # same-namespace pods + the platform's API service.
+                    # Egress unrestricted (CNI policies via the
+                    # CiliumNetworkPolicy below).
+                    - podSelector: {}
+                      policyTypes:
+                        - Ingress
+                      ingress:
+                        - from:
+                            - podSelector: {}
+                            - namespaceSelector:
+                                matchLabels:
+                                  monok8s.io/managed-by: platform
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+
+          # ---------------------------------------------------------
+          # 2. Namespace — labeled with the per-tenant Tenant pointer.
+          # ---------------------------------------------------------
+          - name: namespace
+            base:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                labels:
+                  monok8s.io/managed-by: crossplane
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              # Per-tenant Capsule pointer (not the shared
+              # `customer-tenants` value).
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.labels["capsule.clastix.io/tenant"]
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: ToCompositeFieldPath
+                fromFieldPath: metadata.name
+                toFieldPath: status.namespace
+
+          # ---------------------------------------------------------
+          # 3. CiliumNetworkPolicy — per-tenant lateral isolation.
+          #    Layered on top of Capsule's stock NetworkPolicies for
+          #    L7 + identity-aware rules. Lands in the per-tenant
+          #    namespace.
+          # ---------------------------------------------------------
+          - name: cilium-tenant-isolation
+            base:
+              apiVersion: cilium.io/v2
+              kind: CiliumNetworkPolicy
+              metadata:
+                name: tenant-isolation
+              spec:
+                endpointSelector: {}
+                ingress:
+                  - fromEndpoints:
+                      - matchLabels:
+                          k8s:io.kubernetes.pod.namespace: PLACEHOLDER
+                  - fromEndpoints:
+                      - matchLabels:
+                          k8s:monok8s.io/managed-by: platform
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.namespace
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.ingress[0].fromEndpoints[0].matchLabels["k8s:io.kubernetes.pod.namespace"]
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"

@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
+    "strict": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@monok8s/*": ["packages/*/src"]
+    },
+    "ignoreDeprecations": "6.0"
+  },
+  "exclude": ["node_modules", "dist", "bazel-*"]
+}

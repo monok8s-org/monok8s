@@ -1,0 +1,129 @@
+# tenant-database-cnpg — per-tenant CNPG Cluster provisioning (#82).
+#
+# Reconciles an XTenantDatabase into a single CloudNativePG Cluster CR
+# inside the tenant's namespace. Storage tier (small/medium/large) maps
+# to concrete disk sizes; PostgreSQL major version maps to the CNPG
+# image tag; database + role name come from spec.dbName.
+#
+# Composition selection: XR picks this Composition via
+# `compositionSelector.matchLabels: { monok8s.io/provider: cnpg }`. As
+# cloud DB engines arrive (RDS / Cloud SQL / Azure DB), each lands as a
+# sibling Composition with its own provider label; the XRD's `engine`
+# enum widens alongside.
+#
+# Pipeline mode + function-patch-and-transform per Crossplane v2 — same
+# pattern as the existing tenant-namespace / tenant-capsule / tenant-gcp
+# Compositions.
+#
+# CNPG controller emits a connection Secret named `<cluster>-app`
+# automatically with username/password/uri keys. The XRD's
+# `status.secretName` points at it for downstream consumers (workers,
+# app services). No separate Secret resource is declared here.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: tenant-database-cnpg
+  labels:
+    monok8s.io/composition: tenant-database-cnpg
+    monok8s.io/provider: cnpg
+spec:
+  compositeTypeRef:
+    apiVersion: monok8s.io/v1alpha1
+    kind: XTenantDatabase
+
+  mode: Pipeline
+
+  pipeline:
+    - step: patch-and-transform
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+
+          # ---------------------------------------------------------
+          # CNPG Cluster — per-tenant Postgres. Single-instance for
+          # `first ui`; HA / replicas / PITR are follow-up Issues.
+          # ---------------------------------------------------------
+          - name: cnpg-cluster
+            base:
+              apiVersion: postgresql.cnpg.io/v1
+              kind: Cluster
+              spec:
+                instances: 1
+                bootstrap:
+                  initdb: {}
+                storage: {}
+            patches:
+              # name: <tenantName>-<dbName>. The suffix-by-dbName avoids
+              # collision with the legacy tenant-namespace-provisioned
+              # `<tenantName>-db` Cluster.
+              - type: CombineFromComposite
+                combine:
+                  variables:
+                    - fromFieldPath: spec.tenantName
+                    - fromFieldPath: spec.dbName
+                  strategy: string
+                  string:
+                    fmt: "%s-%s"
+                toFieldPath: metadata.name
+
+              # namespace: tenant-<tenantName>
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.tenantName
+                toFieldPath: metadata.namespace
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+
+              # storage.size: tier → concrete size.
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.storage
+                toFieldPath: spec.storage.size
+                transforms:
+                  - type: map
+                    map:
+                      small: 5Gi
+                      medium: 20Gi
+                      large: 100Gi
+
+              # imageName: ghcr.io/cloudnative-pg/postgresql:<version>
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.postgresVersion
+                toFieldPath: spec.imageName
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "ghcr.io/cloudnative-pg/postgresql:%s"
+
+              # bootstrap.initdb.database = dbName
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.dbName
+                toFieldPath: spec.bootstrap.initdb.database
+
+              # bootstrap.initdb.owner = dbName (CNPG convention:
+              # db name = role name).
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.dbName
+                toFieldPath: spec.bootstrap.initdb.owner
+
+              # Surface the primary endpoint host on the XR status.
+              - type: ToCompositeFieldPath
+                fromFieldPath: status.connectionInfo.host
+                toFieldPath: status.host
+
+              # Surface the CNPG-generated connection Secret name on
+              # the XR status: <cluster-name>-app per CNPG convention.
+              - type: CombineFromComposite
+                combine:
+                  variables:
+                    - fromFieldPath: spec.tenantName
+                    - fromFieldPath: spec.dbName
+                  strategy: string
+                  string:
+                    fmt: "%s-%s-app"
+                toFieldPath: status.secretName

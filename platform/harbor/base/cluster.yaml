@@ -1,0 +1,22 @@
+# Per-Harbor CloudNativePG cluster. Backs Harbor's metadata store
+# (project / repository / replication / scan-result tables).
+# Single instance for 0.1.0 (production tunes to N>=3 + replicas);
+# distinct from spicedb-db / temporal-db / zitadel-db.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: harbor-db
+  namespace: harbor
+spec:
+  instances: 1
+  storage:
+    size: 5Gi
+  bootstrap:
+    initdb:
+      database: registry
+      owner: harbor
+      # Harbor 2.x splits its data across these databases; create them
+      # all up front so the schema-migration jobs can populate.
+      postInitApplicationSQL:
+        - CREATE DATABASE notary_server OWNER harbor;
+        - CREATE DATABASE notary_signer OWNER harbor;

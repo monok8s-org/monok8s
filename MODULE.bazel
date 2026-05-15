@@ -1,0 +1,525 @@
+module(
+    name = "monok8s",
+    version = "0.0.0",
+)
+
+# Skylark utilities (used by tools/bazel/BUILD.bazel for bzl_library).
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+
+# Node / JS — versions pinned to current BCR-published releases.
+bazel_dep(name = "aspect_rules_js", version = "3.0.3")
+bazel_dep(name = "aspect_rules_ts", version = "3.8.8")
+bazel_dep(name = "aspect_rules_esbuild", version = "0.25.1")
+bazel_dep(name = "aspect_rules_jest", version = "0.25.2")
+
+# Go
+bazel_dep(name = "rules_go", version = "0.59.0")
+bazel_dep(name = "gazelle", version = "0.50.0")
+
+# Go external deps — sourced from //:go.mod via gazelle's go_deps bzlmod
+# extension (#107). New direct or transitive deps added by editing go.mod
+# (or `bazel run @rules_go//go -- mod tidy`) and adding to `use_repo` below
+# if a BUILD target needs to reference them.
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_mod = "//:go.mod")
+use_repo(
+    go_deps,
+    "com_github_authzed_authzed_go",
+    "com_github_authzed_grpcutil",
+    "com_github_aws_aws_sdk_go_v2_service_sqs",
+    "com_github_azure_azure_sdk_for_go_sdk_messaging_azservicebus",
+    "com_github_emicklei_go_restful_v3",
+    "com_github_hashicorp_vault_api",
+    "com_github_johannesboyne_gofakes3",
+    "com_github_minio_minio_go_v7",
+    "com_github_nats_io_nats_go",
+    "com_github_nats_io_nats_server_v2",
+    "com_github_spf13_cobra",
+    "com_github_stretchr_testify",
+    "com_google_cloud_go_pubsub",
+    "in_gopkg_yaml_v3",
+    "io_k8s_api",
+    "io_k8s_apimachinery",
+    "io_k8s_client_go",
+    "io_temporal_go_api",
+    "io_temporal_go_sdk",
+    "org_golang_google_protobuf",
+)
+
+# OCI / containers
+bazel_dep(name = "rules_oci", version = "2.3.0")
+bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
+
+# Hermetic stack-component test rules from collider-bazel-extensions.
+# Not yet on BCR — pinned via archive_override against verified tarballs.
+# Hermeticity is a project design principle (see Discussion #4).
+#
+# Each of these rules pre-registers its default toolchain version inside its
+# own MODULE.bazel, so we only `use_extension` + `use_repo` here — no tag
+# calls — to avoid duplicate-repo errors. To pin a different version, fork
+# the rule or wait for a consumer-side override path.
+
+bazel_dep(name = "rules_pg", version = "0.4.0")
+archive_override(
+    module_name = "rules_pg",
+    integrity = "sha256-uiGpItIyoYt3EhPq77/DT3mBMEu62pkCMcTf/r6vzIg=",
+    strip_prefix = "rules_pg-0.4.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_pg/archive/refs/tags/v0.4.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_temporal", version = "0.5.0")
+archive_override(
+    module_name = "rules_temporal",
+    integrity = "sha256-7CfilN0nkiEDmOCpDixvwzYEZcME4sb4tdP/iK5XEfQ=",
+    strip_prefix = "rules_temporal-0.5.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_temporal/archive/refs/tags/v0.5.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_nats", version = "0.1.0")
+archive_override(
+    module_name = "rules_nats",
+    integrity = "sha256-154sKA1Sm7MwregVsyvCFfIBXJjx1bA7hyJv1dx9+bw=",
+    strip_prefix = "rules_nats-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_nats/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_kubernetes", version = "0.3.0")
+archive_override(
+    module_name = "rules_kubernetes",
+    integrity = "sha256-488ZEzIHLP7ZJIVoq9njiktSGMByfvWysxBijr/Oscc=",
+    strip_prefix = "rules_kubernetes-0.3.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_kubernetes/archive/refs/tags/v0.3.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_kind", version = "0.1.4")
+archive_override(
+    module_name = "rules_kind",
+    integrity = "sha256-3or5ZT4U6ZSw3ACScHJSVlQFhjqMcleQJ1m5dlHt+Tg=",
+    strip_prefix = "rules_kind-0.1.4",
+    urls = ["https://github.com/collider-bazel-extensions/rules_kind/archive/refs/tags/v0.1.4.tar.gz"],
+)
+
+bazel_dep(name = "rules_spicedb", version = "0.3.0")
+archive_override(
+    module_name = "rules_spicedb",
+    integrity = "sha256-X1953XxZKIiGQjbtfkSC4qKvLUN3qGQrMlKPznpEghg=",
+    strip_prefix = "rules_spicedb-0.3.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_spicedb/archive/refs/tags/v0.3.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_playwright", version = "0.1.2")
+archive_override(
+    module_name = "rules_playwright",
+    integrity = "sha256-IzncPyyXK//ems2NondH1YApelpT9OHUWaenZ3LHSmc=",
+    strip_prefix = "rules_playwright-0.1.2",
+    urls = ["https://github.com/collider-bazel-extensions/rules_playwright/archive/refs/tags/v0.1.2.tar.gz"],
+)
+
+bazel_dep(name = "rules_itest", version = "0.0.52")
+bazel_dep(name = "rules_argocd", version = "0.1.0")
+archive_override(
+    module_name = "rules_argocd",
+    integrity = "sha256-BdEY9oxYd1P3/L8OFWbgwxchww1cD/lw7qDQZhyPYb8=",
+    strip_prefix = "rules_argocd-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_argocd/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_capsule", version = "0.1.3")
+archive_override(
+    module_name = "rules_capsule",
+    integrity = "sha256-SOoFk6XM/kFraOdJUfk7iqYwmVuQCfT9s5IXFppnZVg=",
+    strip_prefix = "rules_capsule-0.1.3",
+    urls = ["https://github.com/collider-bazel-extensions/rules_capsule/archive/refs/tags/v0.1.3.tar.gz"],
+)
+
+bazel_dep(name = "rules_opa", version = "0.1.0")
+archive_override(
+    module_name = "rules_opa",
+    integrity = "sha256-zEtQhsiF+2OYQwZqflRRnujPVi13oKghyU7++Fir21U=",
+    strip_prefix = "rules_opa-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_opa/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_vault", version = "0.2.0")
+archive_override(
+    module_name = "rules_vault",
+    integrity = "sha256-eUYM0RxKcamO4yTA3pcgM/1NvQjDtKDN9kV1gf6OfKk=",
+    strip_prefix = "rules_vault-0.2.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_vault/archive/refs/tags/v0.2.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_external_secrets", version = "0.1.0")
+archive_override(
+    module_name = "rules_external_secrets",
+    integrity = "sha256-GWrALhxzm0CwXGj/OCKyyBWbU9VJeXnqxg9zopeLSk0=",
+    strip_prefix = "rules_external_secrets-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_external_secrets/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_cilium", version = "0.1.1")
+archive_override(
+    module_name = "rules_cilium",
+    integrity = "sha256-V7BnGxG7pDhN6/O8Wk2HZwhpVpitatVlBXFqmOv0cU0=",
+    strip_prefix = "rules_cilium-0.1.1",
+    urls = ["https://github.com/collider-bazel-extensions/rules_cilium/archive/refs/tags/v0.1.1.tar.gz"],
+)
+
+bazel_dep(name = "rules_keda", version = "0.1.0")
+archive_override(
+    module_name = "rules_keda",
+    integrity = "sha256-iX94cHHDrTa9n1v9Kj2CjvrX7vXsUNiRNtcfmx25kEQ=",
+    strip_prefix = "rules_keda-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_keda/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_tekton", version = "0.1.0")
+archive_override(
+    module_name = "rules_tekton",
+    integrity = "sha256-fAN1Sfbpvc09QjqDgkhu+Rd8iDKROf55NPVhm4nn/wU=",
+    strip_prefix = "rules_tekton-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_tekton/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_zitadel", version = "0.3.0")
+archive_override(
+    module_name = "rules_zitadel",
+    integrity = "sha256-zO2cqrJ+jFQASBstL0IpcX/iTZ9D3Pj+QKupBGPQkVk=",
+    strip_prefix = "rules_zitadel-0.3.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_zitadel/archive/refs/tags/v0.3.0.tar.gz"],
+)
+
+# Observability stack (#25): all 5 pure-glue install rules over rules_kubectl.
+bazel_dep(name = "rules_loki", version = "0.1.0")
+archive_override(
+    module_name = "rules_loki",
+    integrity = "sha256-L78Of30A8hItrsoaILJ2zfA5HicHLQcVHVAkdG0X+q0=",
+    strip_prefix = "rules_loki-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_loki/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_mimir", version = "0.1.0")
+archive_override(
+    module_name = "rules_mimir",
+    integrity = "sha256-0fqrFSe/qJbSz6w4Upr70d+MK30adu3kn4wwqwpcQwo=",
+    strip_prefix = "rules_mimir-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_mimir/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_tempo", version = "0.1.0")
+archive_override(
+    module_name = "rules_tempo",
+    integrity = "sha256-sEIO7vog3Pd9pOVHqimRCMmENAqiYOAWQR9ThSxv/N4=",
+    strip_prefix = "rules_tempo-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_tempo/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_grafana", version = "0.1.0")
+archive_override(
+    module_name = "rules_grafana",
+    integrity = "sha256-5J85lOIO2D/SO9hrpMYiNnVU3MJ4IwrpDLKVNzWdFVU=",
+    strip_prefix = "rules_grafana-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_grafana/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_otel", version = "0.1.0")
+archive_override(
+    module_name = "rules_otel",
+    integrity = "sha256-aMsNBXOMQDuFNttRJyIpErEZXFBJlPcIuv0zM+cBRP4=",
+    strip_prefix = "rules_otel-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_otel/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_harbor", version = "0.1.0")
+archive_override(
+    module_name = "rules_harbor",
+    integrity = "sha256-PA2A3vhyB2H6j1jms6gyucLv+9SR2+LU8+Z4yLdPF+8=",
+    strip_prefix = "rules_harbor-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_harbor/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_argo_rollouts", version = "0.1.0")
+archive_override(
+    module_name = "rules_argo_rollouts",
+    integrity = "sha256-kCR0y8pTsXWIlhxukEHa6fIa6YYD+Ms5XjPJGX9HSz0=",
+    strip_prefix = "rules_argo_rollouts-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_argo_rollouts/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_cloudnativepg", version = "0.1.0")
+archive_override(
+    module_name = "rules_cloudnativepg",
+    integrity = "sha256-9LVVoby6t9HzC0Am9NSXMA90eGUiYLHbgGyf+zQq1i4=",
+    strip_prefix = "rules_cloudnativepg-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_cloudnativepg/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_certmanager", version = "0.1.2")
+archive_override(
+    module_name = "rules_certmanager",
+    integrity = "sha256-HbTwkRZSL1zW6OjstmRSnn9xH8NGq3eCHbHM4my79BI=",
+    strip_prefix = "rules_certmanager-0.1.2",
+    urls = ["https://github.com/collider-bazel-extensions/rules_certmanager/archive/refs/tags/v0.1.2.tar.gz"],
+)
+
+bazel_dep(name = "rules_crossplane", version = "0.1.0")
+archive_override(
+    module_name = "rules_crossplane",
+    integrity = "sha256-3T/TmTJAbNjLyyRkZXil3t54QrRPpr6Ng8X8zr4W0eU=",
+    strip_prefix = "rules_crossplane-0.1.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_crossplane/archive/refs/tags/v0.1.0.tar.gz"],
+)
+
+bazel_dep(name = "rules_atlas", version = "0.3.0")
+archive_override(
+    module_name = "rules_atlas",
+    integrity = "sha256-9FYfNZS1LkShvynmnaWOXajsklMzUzJj3K5txV1QXhY=",
+    strip_prefix = "rules_atlas-0.3.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_atlas/archive/refs/tags/v0.3.0.tar.gz"],
+)
+
+# rules_atlas's `atlas` extension is `mod.is_root`-guarded (avoids
+# duplicate-repo collisions when consumed transitively); consumers
+# declare the wiring themselves — same shape rules_capsule /
+# rules_temporal use. v0.3.0 fixed the README to document this.
+atlas = use_extension("@rules_atlas//:extensions.bzl", "atlas")
+atlas.version(version = "1.2.0")
+use_repo(
+    atlas,
+    "atlas_darwin_amd64",
+    "atlas_darwin_arm64",
+    "atlas_linux_amd64",
+    "atlas_linux_arm64",
+)
+
+register_toolchains("@rules_atlas//toolchain:all")
+
+# Transitive dep of rules_crossplane. rules_crossplane's own MODULE.bazel
+# uses a git_override against this version, but bzlmod only honors
+# overrides from the root module — so we re-declare it here.
+bazel_dep(name = "rules_kubectl", version = "0.2.0")
+archive_override(
+    module_name = "rules_kubectl",
+    integrity = "sha256-mXeULtsLScwapCoCTvz3joQkmNJ686aDCOliOCXt0zo=",
+    strip_prefix = "rules_kubectl-0.2.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_kubectl/archive/refs/tags/v0.2.0.tar.gz"],
+)
+
+# npm dependencies — pnpm-locked, hermetically resolved by aspect_rules_js.
+npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
+npm.npm_translate_lock(
+    name = "npm",
+    pnpm_lock = "//:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm")
+
+# TypeScript toolchain for aspect_rules_ts. The `ts_project` rule
+# resolves its compiler via the `@npm_typescript` repo this extension
+# generates; without it consumers see "no such package
+# '@@npm_typescript'" at analysis time.
+rules_ts_ext = use_extension("@aspect_rules_ts//ts:extensions.bzl", "ext")
+rules_ts_ext.deps()
+use_repo(rules_ts_ext, "npm_typescript")
+
+# Postgres for hermetic DB tests. rules_pg v0.4.0 added a
+# `pg.version()` tag class that fetches a hermetic conda-forge
+# Postgres closure — replaces the prior implicit `pg.system()` mode
+# that required `pg_ctl` to already be on the host. Eliminates the
+# established CI-failure signature on GitHub runners (which don't
+# ship postgres-server-dev). Per collider-bazel-extensions/rules_pg#2.
+pg = use_extension("@rules_pg//:extensions.bzl", "pg")
+pg.version(versions = ["16"])
+use_repo(pg, "pg_16_darwin_amd64", "pg_16_darwin_arm64", "pg_16_linux_amd64")
+
+# Temporal for hermetic workflow tests. rules_temporal v0.5.0's own
+# MODULE.bazel calls `temporal.version(versions = ["1.7.0"])` at
+# module-level (mirrors rules_kubernetes v0.3.0's pattern), so
+# consumers DON'T need to repeat the tag — just `use_extension` +
+# `use_repo` picks up the auto-registered hermetic repos. Per
+# collider-bazel-extensions/rules_temporal#6. Resolves the final
+# `rules_X.system() not found in PATH` CI signature.
+temporal = use_extension("@rules_temporal//:extensions.bzl", "temporal")
+use_repo(temporal, "temporal_1_7_0_darwin_amd64", "temporal_1_7_0_darwin_arm64", "temporal_1_7_0_linux_amd64")
+
+# NATS for the live event bus (#78) and future hermetic pub/sub tests. The
+# extension is `mod.is_root`-guarded (same shape as rules_capsule /
+# rules_temporal / rules_atlas), so consumers wire the version themselves.
+# nats_install (cluster-deploy) uses the in-rule manifest label directly
+# and does not depend on the binary toolchains below — those are wired now
+# so future nats_server / nats_test fixtures land without re-editing here.
+nats = use_extension("@rules_nats//:extensions.bzl", "nats")
+nats.version(
+    cli_version = "0.4.0",
+    version = "2.14.0",
+)
+use_repo(
+    nats,
+    "nats_2_14_0_darwin_amd64",
+    "nats_2_14_0_darwin_arm64",
+    "nats_2_14_0_linux_amd64",
+    "nats_2_14_0_linux_arm64",
+)
+
+register_toolchains("@rules_nats//toolchain:all")
+
+# Kubernetes envtest (rules_kubernetes pre-registers v1.29 in system mode via setup-envtest).
+# Host-binary dependency to be logged in Discussion #4 once #18 introduces the first envtest.
+# Kubernetes envtest (kube-apiserver + etcd + kubectl). rules_kubernetes
+# v0.3.0's own MODULE.bazel calls `kubernetes.version(versions = ["1.29"])`
+# at module-level, so consumers DON'T need to repeat the tag — just
+# `use_extension` + `use_repo` picks up the auto-registered hermetic
+# repos. Eliminates the established CI-failure signature on GitHub
+# runners (which don't ship kube-apiserver). Per
+# collider-bazel-extensions/rules_kubernetes#2.
+kubernetes = use_extension("@rules_kubernetes//:extensions.bzl", "kubernetes")
+use_repo(kubernetes, "k8s_1_29_darwin_amd64", "k8s_1_29_darwin_arm64", "k8s_1_29_linux_amd64")
+
+# kind for L4 end-to-end tests (rules_kind pre-registers v1.29 in system mode).
+# Host-binary dependency (Docker/podman + kind + kubectl) is Hermeticity Gap 2,
+# accepted in Discussion #4.
+kind = use_extension("@rules_kind//:extensions.bzl", "kind")
+use_repo(kind, "kind_1_29_darwin_amd64", "kind_1_29_darwin_arm64", "kind_1_29_linux_amd64")
+
+# SpiceDB for hermetic permission tests (rules_spicedb pre-registers v1.30 in system mode).
+# SpiceDB for hermetic authz tests. rules_spicedb v0.3.0 added a
+# `spicedb.version()` tag class that fetches pinned spicedb + zed
+# binaries from GitHub releases — replaces the prior implicit
+# `spicedb.system()` mode that required spicedb on $PATH. Eliminates
+# the established CI-failure signature on GitHub runners (which don't
+# ship spicedb). Per collider-bazel-extensions/rules_spicedb#3.
+spicedb = use_extension("@rules_spicedb//:extensions.bzl", "spicedb")
+spicedb.version(versions = ["1.30"])
+use_repo(spicedb, "spicedb_1_30_darwin_amd64", "spicedb_1_30_darwin_arm64", "spicedb_1_30_linux_amd64")
+
+# Playwright for hermetic frontend UI tests. rules_playwright v0.1.2 added
+# the `mod.is_root` extension guard, so consumers now declare their own
+# version tag (same shape as the other rules in this list).
+playwright = use_extension("@rules_playwright//:extensions.bzl", "playwright")
+playwright.version(version = "1.49.0")
+use_repo(playwright, "playwright")
+
+# OCI base images — digest-pinned per Hermeticity Gap log (Discussion #4).
+# Resolved via the registry manifest API; refresh by re-running the
+# resolution script in tools/scripts/ when bumping.
+oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+oci.pull(
+    name = "node_distroless",
+    digest = "sha256:13593b7570658e8477de39e2f4a1dd25db2f836d68a0ba771251572d23bb4f8e",
+    image = "gcr.io/distroless/nodejs22-debian12",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64",
+    ],
+)
+oci.pull(
+    name = "distroless_static",
+    digest = "sha256:a9329520abc449e3b14d5bc3a6ffae065bdde0f02667fa10880c49b35c109fd1",
+    image = "gcr.io/distroless/static-debian12",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64",
+    ],
+)
+oci.pull(
+    name = "nginx_distroless",
+    digest = "sha256:5311f138c0e13b6998168dd31f74a98fa0c324767c0fc16ef3f7a556a7f8e0d5",
+    image = "cgr.dev/chainguard/nginx",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64",
+    ],
+)
+use_repo(
+    oci,
+    "distroless_static",
+    "distroless_static_linux_amd64",
+    "distroless_static_linux_arm64",
+    "nginx_distroless",
+    "nginx_distroless_linux_amd64",
+    "nginx_distroless_linux_arm64",
+    "node_distroless",
+    "node_distroless_linux_amd64",
+    "node_distroless_linux_arm64",
+)
+
+# Argo CD install toolchain (for the in-tree shape test, and future
+# argocd_install in #37). rules_argocd's extension fetches the upstream
+# install.yaml at the pinned tag and exposes it as @argocd//:install.yaml.
+argocd = use_extension("@rules_argocd//:extensions.bzl", "argocd")
+argocd.version(
+    name = "argocd",
+    version = "3.3.8",
+)
+use_repo(argocd, "argocd")
+
+register_toolchains("@argocd//:all")
+
+# Capsule install toolchain (for #17's L4 follow-up + the bundled manifest
+# we vendor at platform/capsule/bootstrap.yaml). rules_capsule v0.1.3
+# adds the `mod.is_root` extension guard (closes upstream rules_capsule#2)
+# so consumers can pin a version explicitly without colliding with the
+# library's in-tree tag.
+capsule = use_extension("@rules_capsule//:extensions.bzl", "capsule")
+capsule.version(
+    name = "capsule",
+    version = "0.10.4",
+)
+use_repo(capsule, "capsule")
+
+register_toolchains("@capsule//:all")
+
+# Cilium install toolchain (for #19's L4 follow-up + the bundled manifest
+# we vendor at platform/cilium/bootstrap.yaml).
+cilium = use_extension("@rules_cilium//:extensions.bzl", "cilium")
+cilium.version(
+    name = "cilium",
+    version = "1.16.5",
+)
+use_repo(cilium, "cilium")
+
+register_toolchains("@cilium//:all")
+
+# cert-manager install toolchain (for #24's temporal-operator webhook
+# TLS + #17's Capsule webhook TLS + future workloads). Pair-bumped with
+# the manifest we vendor at platform/cert-manager/bootstrap.yaml.
+cert_manager = use_extension("@rules_certmanager//:extensions.bzl", "cert_manager")
+cert_manager.version(
+    name = "cert_manager",
+    version = "1.18.3",
+)
+use_repo(cert_manager, "cert_manager")
+
+register_toolchains("@cert_manager//:all")
+
+# OPA CLI toolchain (for opa_test + opa_fmt_check). Used by the
+# require-tenant-label rego policy unit test.
+opa = use_extension("@rules_opa//:extensions.bzl", "opa")
+opa.version(version = "1.15.2")
+use_repo(
+    opa,
+    "opa_darwin_amd64",
+    "opa_darwin_arm64",
+    "opa_linux_amd64",
+)
+
+register_toolchains("@rules_opa//toolchain:all")
+
+# Crossplane CLI toolchain (for crossplane_render_test). Multi-platform
+# crank binary downloaded from releases.crossplane.io and sha256-pinned
+# inside rules_crossplane's extensions; consumers just use_repo + register.
+crossplane = use_extension("@rules_crossplane//:extensions.bzl", "crossplane")
+crossplane.version(version = "v2.2.1")
+use_repo(
+    crossplane,
+    "crank_v2_2_1_darwin_amd64",
+    "crank_v2_2_1_darwin_arm64",
+    "crank_v2_2_1_linux_amd64",
+    "crank_v2_2_1_linux_arm64",
+)
+
+register_toolchains(
+    "@crank_v2_2_1_darwin_amd64//:toolchain",
+    "@crank_v2_2_1_darwin_arm64//:toolchain",
+    "@crank_v2_2_1_linux_amd64//:toolchain",
+    "@crank_v2_2_1_linux_arm64//:toolchain",
+)

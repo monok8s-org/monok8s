@@ -1,0 +1,29 @@
+"""Temporal platform install shape smoke (#24).
+
+L1 sh_test asserts the operator bundle (CRDs + operator concatenated
+in a single file by rules_temporal v0.3.0) + CNPG Cluster +
+TemporalCluster CR are structurally well-formed. L2 workflow-
+execution test (rules_temporal) deferred to either the OnboardTenant
+workflow that lands in #30 (apps/workers/onboarding) or a future PR
+that introduces a stub workflow worker — see Discussion #45 Gap 20.
+"""
+
+exports_files(
+    [
+        "cluster.yaml",
+        "operator-bootstrap.yaml",
+        "temporalcluster.yaml",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "temporal_smoke",
+    srcs = ["//platform/temporal/testdata:smoke.sh"],
+    data = [
+        "cluster.yaml",
+        "operator-bootstrap.yaml",
+        "temporalcluster.yaml",
+    ],
+    tags = ["pure"],
+)

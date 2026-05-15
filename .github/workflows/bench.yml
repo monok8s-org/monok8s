@@ -1,0 +1,88 @@
+name: Bench
+
+# #166 Phase B (#189). Out-of-band benchmark workflow — runs on a
+# nightly schedule + on the `bench-me` label. Not a PR-check (pgbench
+# latency is too slow for the gate loop); results land in artifact
+# storage + the threshold checker fails the job on TPS / latency
+# regression vs. the in-repo baseline at packages/db/bench/baseline/.
+
+on:
+  schedule:
+    # 04:11 UTC nightly. Off-:00 cadence per the project's
+    # don't-stampede-the-hour convention.
+    - cron: "11 4 * * *"
+  pull_request:
+    types: [labeled]
+  workflow_dispatch: {}
+
+jobs:
+  bench:
+    # Schedule + workflow_dispatch always run. PR-label fires only when
+    # the label that was just added is `bench-me`.
+    if: |
+      github.event_name != 'pull_request' ||
+      github.event.label.name == 'bench-me'
+    name: bazel test //... --test_tag_filters=bench
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bazel via bazelisk
+        uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      - name: bazel test --test_tag_filters=bench
+        # `--test_tag_filters=bench` flips the default `.bazelrc` filter
+        # (which excludes bench) to include it. `--test_output=all`
+        # forwards pgbench stdout to the step log + the test logs in
+        # bazel-testlogs/, so artifact upload below can pick them up.
+        run: |
+          bazel test //... \
+            --config=remote \
+            --test_tag_filters=bench \
+            --test_output=all \
+            --remote_upload_local_results \
+            --remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY \
+            --bes_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+
+      - name: Collect bench output
+        if: always()
+        # Script source-of-truth lives at packages/db/bench/collect_bench_logs.sh
+        # so the find+sed slug logic is unit-testable via Bazel sh_test
+        # (//packages/db:collect_bench_logs_test). Direct bash invocation
+        # skips bazel startup overhead for the artifact-collection step.
+        run: bash packages/db/bench/collect_bench_logs.sh bench-results
+
+      - name: Upload bench results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results-${{ github.run_id }}
+          path: bench-results/
+          retention-days: 90
+
+      - name: Regression check
+        # Threshold checker — fails the job when TPS drops > 2× or
+        # per-statement latency rises > 2× vs. the committed baseline.
+        # `if: always()` because the prior bazel-test step exits 38
+        # on this project's GHA whenever the BEP upload can't
+        # authenticate (no BuildBuddy API key on the repo), even
+        # though every bench target itself passed — so the
+        # regression check must run on the captured artifacts
+        # regardless of the prior step's exit code. The internal
+        # EMPTY.txt short-circuit handles the "no bench logs
+        # captured" case.
+        if: always()
+        run: |
+          if [ -f bench-results/EMPTY.txt ]; then
+            echo "skipping regression check — no bench output captured"
+            exit 0
+          fi
+          bazel run //packages/db:check_regression -- \
+            $(pwd)/bench-results $(pwd)/packages/db/bench/baseline

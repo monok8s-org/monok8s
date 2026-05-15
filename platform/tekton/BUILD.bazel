@@ -1,0 +1,30 @@
+"""Tekton Pipelines bootstrap + 6 reusable Tasks (#26) +
+the apps-api-build Pipeline composing them (#28).
+
+L1 sh_test asserts: operator bundle has expected core Deployments +
+CRDs; each Task is generic (parameter-driven, no hardcoded service
+name); the apps-api-build Pipeline composes the 6 Tasks in the right
+order with the right digest-pinned references; the staging overlay
+that the Pipeline updates carries a digest-pinned image entry.
+
+L4 cluster admission + Pipeline execution lives in #37 — the
+rules_kind cluster brings up Tekton + Harbor + ArgoCD and runs the
+apps-api-build Pipeline against a tarball-loaded apps/api image.
+"""
+
+sh_test(
+    name = "tekton_smoke",
+    srcs = ["//platform/tekton/testdata:smoke.sh"],
+    data = [
+        "bootstrap.yaml",
+        "pipelines/api-build.yaml",
+        "tasks/bazel-build-image.yaml",
+        "tasks/bazel-test.yaml",
+        "tasks/clone.yaml",
+        "tasks/cosign-sign.yaml",
+        "tasks/gitops-update.yaml",
+        "tasks/oci-push.yaml",
+        "//apps/api/k8s/overlays/staging:kustomization.yaml",
+    ],
+    tags = ["pure"],
+)

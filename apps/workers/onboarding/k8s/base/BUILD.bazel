@@ -1,0 +1,8 @@
+exports_files(
+    [
+        "deployment.yaml",
+        "rbac.yaml",
+        "kustomization.yaml",
+    ],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,39 @@
+# Alertmanager configuration patch for Model B installs.
+#
+# Adds a webhook receiver that forwards firing alerts to Model A's
+# alert ingestion endpoint. Applied after registration.
+#
+# MODEL_A_ALERT_URL and INSTALLATION_API_KEY are written by the registration Job.
+# The API key is stored in Vault at secret/monok8s/model-a/installation-api-key
+# and injected via the Vault Agent sidecar.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-model-a-patch
+  namespace: monok8s-platform
+data:
+  patch.yaml: |
+    receivers:
+      - name: model-a
+        webhook_configs:
+          - url: "${MODEL_A_ALERT_URL}"
+            http_config:
+              authorization:
+                type: Bearer
+                credentials: "${INSTALLATION_API_KEY}"
+            # Send all fields — Model A uses labels to route to tenant channels
+            send_resolved: true
+            max_alerts: 50
+
+    route:
+      # Append Model A as an additional receiver on the root route.
+      # Alerts still go to local receivers (PagerDuty, Slack, etc.) first.
+      receiver: default
+      routes:
+        - receiver: model-a
+          # Forward everything — Model A filters by severity for notifications
+          continue: true
+          group_wait:      10s
+          group_interval:  1m
+          repeat_interval: 4h

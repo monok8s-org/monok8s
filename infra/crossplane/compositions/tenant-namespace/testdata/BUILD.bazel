@@ -1,0 +1,4 @@
+exports_files(
+    ["smoke.sh"],
+    visibility = ["//infra/crossplane/compositions/tenant-namespace:__pkg__"],
+)

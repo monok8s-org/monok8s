@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: monok8s-worker-onboarding
+---
+# ClusterRole — the worker submits cluster-scoped XR resources
+# (XTenant / XTenantDatabase, both cluster-scoped CRDs) and creates
+# Argo Workflow CRs in the `argo` namespace. The Argo permissions
+# could be a namespace-scoped Role+RoleBinding to `argo`; using a
+# ClusterRole keeps the binding simple at the cost of a slightly
+# wider permission scope.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: monok8s-worker-onboarding
+rules:
+  # XR submission — cluster-scoped Crossplane composites for tenant
+  # namespaces + tenant databases.
+  - apiGroups: ["monok8s.io"]
+    resources:
+      - xtenants
+      - xtenantdatabases
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  # XR status read — activities_xr.go polls `.status.ready` to know
+  # when Crossplane finishes reconciling.
+  - apiGroups: ["monok8s.io"]
+    resources:
+      - xtenants/status
+      - xtenantdatabases/status
+    verbs: ["get"]
+  # Argo Workflow submission — activities_argo.go submits Workflow CRs
+  # in `argo` namespace for the mint-tenant-vault-key + apply-tenant-
+  # migrations WorkflowTemplates.
+  - apiGroups: ["argoproj.io"]
+    resources:
+      - workflows
+    verbs: ["get", "list", "watch", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: monok8s-worker-onboarding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: monok8s-worker-onboarding
+subjects:
+  - kind: ServiceAccount
+    name: monok8s-worker-onboarding
+    # namespace is patched per-environment in overlays/{staging,prod}.
+    namespace: monok8s-prod

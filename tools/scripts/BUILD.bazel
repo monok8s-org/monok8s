@@ -1,0 +1,29 @@
+# CI-side helper scripts extracted from .github/workflows/* run-steps so
+# their behavior is unit-testable via sh_test under Bazel (per the
+# project's Bazel-only-test-surface rule). The workflows invoke the
+# shipped script directly via `bash` (not `bazel run`) to skip bazel
+# startup overhead in the CI loop.
+
+# mask_bep_exit38.sh — wraps `bazel test //...` in pr-checks.yml to
+# mask exit code 38 from the BuildBuddy BEP upload step when the
+# underlying tests passed. The repo doesn't carry a BUILDBUDDY_API_KEY
+# secret (project decision), so the BEP upload always fails post-
+# test-run; this is the same shape bench.yml routes around via its
+# `if: always()` regression-check step. See script header for details.
+sh_binary(
+    name = "mask_bep_exit38",
+    srcs = ["mask_bep_exit38.sh"],
+    visibility = ["//visibility:public"],
+)
+
+# Hermetic unit test — drives mask_bep_exit38.sh against 7 fixture
+# bazel-stub scripts covering the exit-code translation matrix
+# (bazel-0 / bazel-38+green / bazel-38+partial / bazel-38+empty /
+# bazel-1 / bazel-38+mid-green / missing-args).
+sh_test(
+    name = "mask_bep_exit38_test",
+    srcs = ["mask_bep_exit38_test.sh"],
+    args = ["$(rootpath mask_bep_exit38.sh)"],
+    data = ["mask_bep_exit38.sh"],
+    tags = ["pure"],
+)

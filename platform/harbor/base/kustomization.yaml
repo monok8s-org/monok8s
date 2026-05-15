@@ -1,0 +1,18 @@
+# Harbor base — bundled install + per-Harbor CNPG cluster + the
+# strategic-merge patches that swap Harbor's internal Postgres for
+# the CNPG cluster.
+#
+# The two storage overlays (overlays/baremetal/ + overlays/gcp/) layer
+# on top of this base; they're the consumer-facing entrypoint that
+# ArgoCD applies.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: harbor
+
+resources:
+  - bootstrap.yaml
+  - cluster.yaml
+
+patches:
+  - path: cnpg-patches.yaml

@@ -1,0 +1,83 @@
+# Heartbeat CronJob — runs every 5 minutes on Model B.
+# POSTs to Model A's heartbeat endpoint with the installation API key.
+# Model A's HeartbeatMonitorWorkflow signals on receipt; alerts fire if missed.
+#
+# MODEL_A_API_URL, INSTALLATION_ID, and INSTALLATION_API_KEY are written
+# by the registration Job and stored in the `model-a-registration` Secret.
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: model-a-heartbeat
+  namespace: monok8s-platform
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: model-a-heartbeat
+          containers:
+            - name: heartbeat
+              image: curlimages/curl:8.6.0
+              command:
+                - sh
+                - -c
+                - |
+                  K8S_VERSION=$(kubectl version --client -o json 2>/dev/null | \
+                    grep -o '"gitVersion":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "unknown")
+
+                  curl -sf \
+                    -X POST \
+                    -H "Authorization: Bearer ${INSTALLATION_API_KEY}" \
+                    -H "Content-Type: application/json" \
+                    -d "{
+                      \"json\": {
+                        \"installationId\": \"${INSTALLATION_ID}\",
+                        \"k8sVersion\": \"${K8S_VERSION}\",
+                        \"modelBVersion\": \"${MODEL_B_VERSION}\"
+                      }
+                    }" \
+                    "${MODEL_A_API_URL}/trpc/installations.heartbeat"
+              envFrom:
+                - secretRef:
+                    name: model-a-registration   # written by registration Job
+              env:
+                - name: MODEL_B_VERSION
+                  value: "0.1.0"   # replaced by Tekton at build time
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: model-a-heartbeat
+  namespace: monok8s-platform
+---
+# RBAC: heartbeat SA only needs to read the registration secret
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: model-a-heartbeat
+  namespace: monok8s-platform
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [model-a-registration]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: model-a-heartbeat
+  namespace: monok8s-platform
+subjects:
+  - kind: ServiceAccount
+    name: model-a-heartbeat
+roleRef:
+  kind: Role
+  name: model-a-heartbeat
+  apiGroup: rbac.authorization.k8s.io

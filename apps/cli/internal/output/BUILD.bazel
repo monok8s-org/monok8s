@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "output",
+    srcs = glob(
+        ["*.go"],
+        exclude = ["*_test.go"],
+    ),
+    importpath = "github.com/monok8s/monok8s/apps/cli/internal/output",
+    visibility = ["//apps/cli:__subpackages__"],
+    deps = [
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+go_test(
+    name = "output_test",
+    srcs = ["print_test.go"],
+    tags = ["pure"],
+    deps = [":output"],
+)

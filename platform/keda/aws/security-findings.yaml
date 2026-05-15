@@ -1,0 +1,61 @@
+# KEDA ScaledObjects for the security-findings worker
+# Scale based on queue depth; minReplicaCount=1 to avoid cold starts on security events.
+# Only the ScaledObject matching the active host cloud should be applied.
+
+---
+# GCP Pub/Sub
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: security-findings-gcp
+  namespace: security-findings
+spec:
+  scaleTargetRef:
+    name: security-findings-worker
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  triggers:
+    - type: gcp-pubsub
+      metadata:
+        subscriptionName: monok8s-security-findings-sub
+        mode: SubscriptionSize
+        value: "5"
+
+---
+# AWS SQS FIFO
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: security-findings-aws
+  namespace: security-findings
+spec:
+  scaleTargetRef:
+    name: security-findings-worker
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  triggers:
+    - type: aws-sqs-queue
+      metadata:
+        queueURL: https://sqs.us-east-1.amazonaws.com/ACCOUNT_ID/monok8s-security-findings.fifo
+        queueLength: "5"
+        awsRegion: us-east-1
+        identityOwner: operator
+
+---
+# Azure Service Bus
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: security-findings-azure
+  namespace: security-findings
+spec:
+  scaleTargetRef:
+    name: security-findings-worker
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  triggers:
+    - type: azure-servicebus
+      metadata:
+        namespace: monok8s
+        queueName: monok8s-security-findings
+        messageCount: "5"

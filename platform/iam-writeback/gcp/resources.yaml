@@ -1,0 +1,61 @@
+---
+# Log sink: routes Cloud Audit Log IAM events to Pub/Sub.
+# Exclusion filter ensures Crossplane-originated changes never reach the queue,
+# preventing the write-back reconciliation loop.
+apiVersion: logging.cnrm.cloud.google.com/v1beta1
+kind: LoggingLogSink
+metadata:
+  name: monok8s-iam-events
+  namespace: monok8s-platform
+  annotations:
+    cnrm.cloud.google.com/project-id: "${PROJECT_ID}"
+spec:
+  destination: pubsub.googleapis.com/projects/${PROJECT_ID}/topics/monok8s-iam-events
+  filter: |
+    protoPayload.methodName=~"\.setIamPolicy$"
+    protoPayload.serviceData.policyDelta.bindingDeltas.role=~"^projects/.*/roles/monok8s_"
+  # Exclude Crossplane service account — prevents write-back loop
+  exclusions:
+    - name: exclude-crossplane
+      filter: |
+        protoPayload.authenticationInfo.principalEmail="crossplane@${PROJECT_ID}.iam.gserviceaccount.com"
+---
+# Pub/Sub topic
+apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+kind: PubSubTopic
+metadata:
+  name: monok8s-iam-events
+  namespace: monok8s-platform
+  annotations:
+    cnrm.cloud.google.com/project-id: "${PROJECT_ID}"
+spec:
+  messageRetentionDuration: 604800s  # 7 days
+---
+# Pub/Sub subscription (pull) — consumed by the iam-writeback worker
+apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+kind: PubSubSubscription
+metadata:
+  name: monok8s-iam-writeback
+  namespace: monok8s-platform
+  annotations:
+    cnrm.cloud.google.com/project-id: "${PROJECT_ID}"
+spec:
+  topicRef:
+    name: monok8s-iam-events
+  ackDeadlineSeconds: 60
+  messageRetentionDuration: 604800s
+  retryPolicy:
+    minimumBackoff: 10s
+    maximumBackoff: 600s
+  deadLetterPolicy:
+    deadLetterTopicRef:
+      name: monok8s-iam-events-dlq
+    maxDeliveryAttempts: 5
+---
+apiVersion: pubsub.cnrm.cloud.google.com/v1beta1
+kind: PubSubTopic
+metadata:
+  name: monok8s-iam-events-dlq
+  namespace: monok8s-platform
+  annotations:
+    cnrm.cloud.google.com/project-id: "${PROJECT_ID}"

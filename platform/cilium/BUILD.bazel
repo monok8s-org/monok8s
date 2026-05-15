@@ -1,0 +1,8 @@
+"""Cilium bootstrap shape smoke (#19)."""
+
+sh_test(
+    name = "cilium_smoke",
+    srcs = ["//platform/cilium/testdata:smoke.sh"],
+    data = ["bootstrap.yaml"],
+    tags = ["pure"],
+)

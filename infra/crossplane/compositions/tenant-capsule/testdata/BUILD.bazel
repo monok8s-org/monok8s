@@ -1,0 +1,7 @@
+exports_files(
+    [
+        "smoke.sh",
+        "valid-xtenant-capsule.yaml",
+    ],
+    visibility = ["//infra/crossplane/compositions/tenant-capsule:__pkg__"],
+)

@@ -1,1 +1,47 @@
+# Bazel — repo-root symlinks only (bazel-bin, bazel-out, bazel-testlogs,
+# bazel-<workspace_name>). The leading `/` anchors the pattern to the
+# repo root so it doesn't accidentally swallow legitimate files like
+# platform/tekton/tasks/bazel-test.yaml under subdirectories.
+/bazel-*
+.bazel/
+
+# Node
+node_modules/
+dist/
+.pnpm-store/
+
+# Local secrets — never commit
+.env.local
+*.env.local
+secrets.edn
+
+# Terraform state
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tilt
+.tilt/
+
+# Kind
+kubeconfig.yaml
+
+# forge-manager skill runtime — buffered writes + per-session lock
+.claude/backups/
+.claude/pending-posts.md
+.claude/scheduled_tasks.lock
+
+# Skill state — never mirror to public
 .claude/

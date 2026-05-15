@@ -1,0 +1,6 @@
+definition user {}
+
+definition tenant {
+    relation member: user
+    permission read = member
+}

@@ -1,0 +1,84 @@
+# OTel Collector configuration patch for Model B installs.
+#
+# Applied after registration — overlays the base OTel Collector ConfigMap.
+# The three variables are written by the registration Job:
+#   INSTALLATION_ID   — UUID issued at registration
+#   MODEL_A_OTLP_URL  — https://telemetry.monok8s.io/v1/<installation_id>/otlp
+#   MODEL_A_METRICS_URL — https://telemetry.monok8s.io/v1/<installation_id>/metrics
+#   MODEL_A_LOGS_URL  — https://telemetry.monok8s.io/v1/<installation_id>/logs
+#
+# TLS: cert-manager Certificate (see cert-rotation.yaml) writes the client cert
+# to the `installation-client-cert` secret, mounted at /etc/tls/model-a/.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-model-a-exporters
+  namespace: monok8s-platform
+  annotations:
+    # Merged into the main OTel Collector config by the collector's --config flag
+    # supporting multiple config sources.
+    monok8s.io/config-merge: "true"
+data:
+  exporters.yaml: |
+    exporters:
+      # Metrics → Model A Mimir (via telemetry-gateway, mTLS)
+      prometheusremotewrite/model-a:
+        endpoint: "${MODEL_A_METRICS_URL}/api/v1/push"
+        tls:
+          ca_file:   /etc/tls/model-a/ca.crt
+          cert_file: /etc/tls/model-a/tls.crt
+          key_file:  /etc/tls/model-a/tls.key
+        headers:
+          X-Installation-Id: "${INSTALLATION_ID}"
+        resource_to_telemetry_conversion:
+          enabled: true
+
+      # Logs → Model A Loki (via telemetry-gateway, mTLS)
+      loki/model-a:
+        endpoint: "${MODEL_A_LOGS_URL}/loki/api/v1/push"
+        tls:
+          ca_file:   /etc/tls/model-a/ca.crt
+          cert_file: /etc/tls/model-a/tls.crt
+          key_file:  /etc/tls/model-a/tls.key
+        headers:
+          X-Installation-Id: "${INSTALLATION_ID}"
+        default_labels_enabled:
+          exporter: false
+
+      # Traces → Model A Tempo (via telemetry-gateway, mTLS)
+      otlphttp/model-a:
+        endpoint: "${MODEL_A_OTLP_URL}"
+        tls:
+          ca_file:   /etc/tls/model-a/ca.crt
+          cert_file: /etc/tls/model-a/tls.crt
+          key_file:  /etc/tls/model-a/tls.key
+        headers:
+          X-Installation-Id: "${INSTALLATION_ID}"
+
+    processors:
+      # Tag all telemetry with the installation ID as a resource attribute.
+      # The telemetry-gateway also validates this matches the cert CN.
+      resource/installation:
+        attributes:
+          - key: installation.id
+            value: "${INSTALLATION_ID}"
+            action: upsert
+          - key: service.namespace
+            value: "model-b"
+            action: upsert
+
+    service:
+      pipelines:
+        metrics/model-a:
+          receivers:  [prometheus]
+          processors: [resource/installation, batch]
+          exporters:  [prometheusremotewrite/model-a]
+        logs/model-a:
+          receivers:  [filelog]
+          processors: [resource/installation, batch]
+          exporters:  [loki/model-a]
+        traces/model-a:
+          receivers:  [otlp]
+          processors: [resource/installation, batch]
+          exporters:  [otlphttp/model-a]

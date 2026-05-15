@@ -1,0 +1,95 @@
+load("//tools/bazel:solid.bzl", "solid_bundle", "solid_test")
+load("//tools/bazel:oci.bzl", "frontend_image")
+
+# Production-bundle srcs exclude .test.tsx so the test files don't
+# ship in the SPA bundle. solid_bundle's transitive esbuild call would
+# otherwise walk them and either inline or warn.
+solid_bundle(
+    name = "bundle",
+    entry_point = "src/index.tsx",
+    # `allow_empty = True` lets the glob accept the absence of any
+    # `*.ts` files (frontend currently has only `.tsx` + `.css` —
+    # `.ts` is reserved for future shared types extracted out of
+    # `.tsx`). Without this, glob errors with "didn't match anything,
+    # but allow_empty is set to False" under Bazel 8's default
+    # incompatible_disallow_empty_glob = True.
+    srcs = glob(
+        [
+            "src/**/*.tsx",
+            "src/**/*.ts",
+            "src/**/*.css",
+        ],
+        exclude = ["src/**/*.test.tsx", "src/**/*.test.ts"],
+        allow_empty = True,
+    ),
+    deps = [
+        # #192 / #91 Phase C — workspace-linked @monok8s/trpc carries the
+        # createMonok8sClient factory consumed by src/lib/trpc.ts. Bazel
+        # surfaces the pnpm workspace symlink via
+        # //:node_modules/@monok8s/trpc once package.json declares it
+        # and .bazelignore exempts the nested node_modules.
+        "//:node_modules/@monok8s/trpc",
+        "//:node_modules/@trpc/client",
+        "//:node_modules/@trpc/server",
+    ],
+)
+
+# L1 SolidJS unit tests (#193 — closes Discussion #45 Gap 10 + #91
+# Phase A's deferred frontend L1). Phase A's solid.bzl macro work
+# already wired the jest_config + jest-environment-jsdom plumbing;
+# this target drops in once jest 30 + jest-environment-jsdom 30 +
+# babel-jest 30 unified in package.json.
+solid_test(
+    name = "shell_unit_test",
+    srcs = [
+        "src/components/AppShell.tsx",
+        "src/components/AuditLogView.test.tsx",
+        "src/components/AuditLogView.tsx",
+        "src/components/PrincipalAdmin.test.tsx",
+        "src/components/PrincipalAdmin.tsx",
+        "src/components/WorkflowTimeline.test.tsx",
+        "src/components/WorkflowTimeline.tsx",
+        "src/lib/auth.test.tsx",
+        "src/lib/auth.tsx",
+        # Route tests (#107 / closes Discussion #45 subscription gap).
+        # Each test file uses jest.mock("../lib/trpc", ...) at the top
+        # to replace the workspace-package-importing module entirely,
+        # bypassing the @monok8s/trpc resolution issue from session 59.
+        # trpc.ts IS in this list (jest needs to resolve the path to
+        # set up the mock interception) but its `@monok8s/trpc` import
+        # is never executed — jest.mock replaces the module before its
+        # body runs.
+        "src/lib/trpc.ts",
+        "src/routes/Audit.test.tsx",
+        "src/routes/Audit.tsx",
+        "src/routes/Principals.test.tsx",
+        "src/routes/Principals.tsx",
+        "src/routes/TenantDetail.test.tsx",
+        "src/routes/TenantDetail.tsx",
+        "src/routes/TenantNew.test.tsx",
+        "src/routes/TenantNew.tsx",
+        "src/routes/Tenants.test.tsx",
+        "src/routes/Tenants.tsx",
+        "src/routes/Workflows.test.tsx",
+        "src/routes/Workflows.tsx",
+    ],
+    tags = ["pure"],
+)
+
+# Future-proofing for the jest version skew that originally forced
+# Phase A's deferral: assert every jest-family pin in the workspace
+# package.json shares a single semver major. Lives next to
+# shell_unit_test so the contract solid_test depends on is pinned
+# in the same package.
+sh_test(
+    name = "jest_version_unification_test",
+    srcs = ["jest_version_unification_test.sh"],
+    args = ["$(rootpath //:package.json)"],
+    data = ["//:package.json"],
+    tags = ["pure"],
+)
+
+frontend_image(
+    name = "image",
+    bundle = ":bundle",
+)

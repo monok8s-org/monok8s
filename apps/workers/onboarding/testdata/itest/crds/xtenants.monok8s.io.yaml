@@ -1,0 +1,43 @@
+# Minimal CRD for XTenant — flat CRD (not Crossplane XRD).
+#
+# The L2 workflow_itest target does NOT run the Crossplane controller.
+# Crossplane's XRDs register API kinds only when the controller is
+# reconciling them; in envtest's bare apiserver+etcd, an XRD is just
+# data sitting in etcd. Instead, we vendor a minimal plain CRD that
+# registers `monok8s.io/v1alpha1 XTenant` as a queryable kind so
+# activities_xr.go's `dynamic.Interface.Create(...)` against xtenantGVR
+# succeeds. The driver's sidecar goroutine #1 simulates the
+# reconcile by watching ADDED events and patching status.ready=true.
+#
+# Schema is permissive (x-kubernetes-preserve-unknown-fields: true)
+# because the activities submit specific shapes but the test apiserver
+# doesn't need to validate them.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: xtenants.monok8s.io
+spec:
+  group: monok8s.io
+  scope: Cluster
+  names:
+    plural: xtenants
+    singular: xtenant
+    kind: XTenant
+    listKind: XTenantList
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      # No `subresources: { status: {} }` declaration: the real
+      # XRD-generated XTenant CRD has one, but in this envtest the
+      # driver's sidecar updates `.status.ready=true` via a plain
+      # Update(...) call. With a status subresource declared, the
+      # apiserver silently strips status field changes from regular
+      # Update calls — UpdateStatus would be required, which the
+      # production code (activities_xr.go's poll loop) only reads,
+      # never writes. Skipping the subresource keeps the sidecar
+      # patch path simple.

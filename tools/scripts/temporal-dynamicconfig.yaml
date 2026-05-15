@@ -1,0 +1,11 @@
+# Temporal dynamic config for local development.
+# Relaxes limits that would otherwise throttle local workflows.
+limit.maxIDLength:
+  - value: 255
+    constraints: {}
+frontend.enableClientVersionCheck:
+  - value: false
+    constraints: {}
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true
+    constraints: {}

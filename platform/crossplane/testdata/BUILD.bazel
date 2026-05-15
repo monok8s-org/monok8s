@@ -1,0 +1,4 @@
+exports_files(
+    ["bootstrap_smoke.sh"],
+    visibility = ["//platform/crossplane:__pkg__"],
+)

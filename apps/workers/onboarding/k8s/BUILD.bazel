@@ -1,0 +1,20 @@
+"""K8s manifests for the onboarding Temporal worker (#158).
+
+Layout follows the apps/<service>/k8s/{base,overlays/{staging,prod}}
+convention from apps/api/k8s/ + apps/CLAUDE.md. The appset at
+platform/argocd/appsets/workers.yaml dispatches to the per-env
+overlays.
+
+Pure grep-based shape smoke; no cluster, no Docker.
+"""
+
+sh_test(
+    name = "smoke",
+    srcs = ["//apps/workers/onboarding/k8s/testdata:smoke.sh"],
+    data = [
+        "//apps/workers/onboarding/k8s/base:deployment.yaml",
+        "//apps/workers/onboarding/k8s/base:kustomization.yaml",
+        "//apps/workers/onboarding/k8s/base:rbac.yaml",
+    ],
+    tags = ["pure"],
+)

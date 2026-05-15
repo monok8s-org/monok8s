@@ -1,0 +1,34 @@
+"""Example: itest_suite bringing up a single nats_server.
+
+Smoke proof for the `nats` key added to `tools/bazel/itest.bzl`'s
+`_SUPPORTED` dict — boots a hermetic in-process nats-server via
+rules_nats and confirms `itest_suite` exports the canonical `NATS_URL`
+env var alongside the native `NATS_HOST` / `NATS_PORT` keys.
+
+Shape mirrors `tools/bazel/examples/pg_spicedb/` so future smokes for
+other backends can copy the pattern.
+"""
+
+load("@rules_nats//:defs.bzl", "nats_server")
+load("//tools/bazel:itest.bzl", "itest_suite")
+
+nats_server(
+    name = "nats",
+    # JetStream defaults on; pub/sub-only smoke doesn't care either way.
+    tags = ["manual"],
+)
+
+sh_binary(
+    name = "smoke_bin",
+    srcs = ["smoke.sh"],
+    tags = ["manual"],
+)
+
+itest_suite(
+    name = "smoke",
+    servers = {
+        "nats": ":nats",
+    },
+    tags = ["impure"],
+    test = ":smoke_bin",
+)

@@ -1,0 +1,28 @@
+# SpiceDB platform component — operator + Cluster + SpiceDBCluster +
+# schema bootstrap. Depends on platform/cloudnativepg (sync wave 0)
+# being up so the postgresql.cnpg.io CRD is registered.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: spicedb
+  namespace: argocd
+  annotations:
+    # Sync after CNPG operator (wave 0) so cluster.yaml's
+    # postgresql.cnpg.io/v1 Cluster CR resolves.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: monok8s
+  source:
+    repoURL: https://github.com/monok8s-org/monok8s-dev
+    targetRevision: main
+    path: platform/spicedb
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: spicedb
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

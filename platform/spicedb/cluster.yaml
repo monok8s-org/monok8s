@@ -1,0 +1,21 @@
+# Per-SpiceDB CloudNativePG cluster. Backs the SpiceDB datastore — its
+# AuthZed schema + relationships persist here through restarts.
+# Single instance for 0.1.0 (multi-instance + read replicas are a
+# 0.2.0+ scaling decision).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: spicedb-db
+  namespace: spicedb
+spec:
+  instances: 1
+  storage:
+    size: 5Gi
+  bootstrap:
+    initdb:
+      database: spicedb
+      owner: spicedb
+  postgresql:
+    parameters:
+      # SpiceDB writes a lot of small txns — modest-but-not-default WAL.
+      max_wal_size: 1GB

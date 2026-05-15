@@ -1,0 +1,61 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: monok8s-ci
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: image-tag
+      type: string
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+  workspaces:
+    - name: source
+  tasks:
+    - name: clone
+      taskRef:
+        name: git-clone
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+      workspaces:
+        - name: output
+          workspace: source
+
+    - name: bazel-test
+      runAfter: [clone]
+      taskRef:
+        name: bazel
+      params:
+        - name: command
+          value: test
+        - name: targets
+          value: "//..."
+      workspaces:
+        - name: source
+          workspace: source
+
+    - name: bazel-build-push
+      runAfter: [bazel-test]
+      taskRef:
+        name: bazel-build-push
+      params:
+        - name: targets
+          value: "//apps/...:image_push //frontend:image_push"
+        - name: image-tag
+          value: $(params.image-tag)
+      workspaces:
+        - name: source
+          workspace: source
+
+    - name: update-gitops
+      runAfter: [bazel-build-push]
+      taskRef:
+        name: git-update-image-tag
+      params:
+        - name: image-tag
+          value: $(params.image-tag)

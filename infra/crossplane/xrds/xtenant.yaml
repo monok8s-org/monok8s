@@ -1,0 +1,55 @@
+# XTenant — the cluster-scoped Crossplane composite resource that represents
+# one customer tenant. Created by the Temporal OnboardTenant workflow per
+# Discussion #3 §The demo path; reconciled by a tenant-namespace + cloud-
+# specific Composition pair (#14, #15).
+#
+# Shape per Issue #13: required spec.name, spec.postgresVersion (14|15|16);
+# status fields populated by Compositions during reconcile.
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xtenants.monok8s.io
+spec:
+  group: monok8s.io
+  names:
+    kind: XTenant
+    plural: xtenants
+  claimNames:
+    kind: Tenant
+    plural: tenants
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - name
+                - postgresVersion
+              properties:
+                name:
+                  type: string
+                  description: Tenant slug, used to derive child resource names (namespace, db cluster, etc.).
+                  minLength: 1
+                  maxLength: 63
+                  pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                postgresVersion:
+                  type: string
+                  description: PostgreSQL major version provisioned for this tenant.
+                  enum: ["14", "15", "16"]
+            status:
+              type: object
+              properties:
+                ready:
+                  type: boolean
+                  description: True once every child resource has reached a ready condition.
+                namespace:
+                  type: string
+                  description: K8s namespace created for this tenant by the tenant-namespace Composition.
+                dbHost:
+                  type: string
+                  description: DNS name of the per-tenant Postgres cluster created by CloudNativePG.

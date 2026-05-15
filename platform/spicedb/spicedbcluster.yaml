@@ -1,0 +1,20 @@
+# SpiceDBCluster CR — the operator (operator-bootstrap.yaml) reconciles
+# this into a SpiceDB Deployment + Service backed by the per-spicedb
+# CloudNativePG cluster (cluster.yaml).
+#
+# The datastoreEngineConnURI references the secret CloudNativePG creates
+# for the spicedb user; CNPG's secret naming convention is
+# <cluster>-app: see spicedb-db-app.
+apiVersion: authzed.com/v1alpha1
+kind: SpiceDBCluster
+metadata:
+  name: spicedb
+  namespace: spicedb
+spec:
+  config:
+    datastoreEngine: postgres
+    # The image tag is governed by the operator's own version-pin set;
+    # bumping rules_spicedb's pinned image at the operator level
+    # propagates here. Operator default is v1.x stable.
+    logLevel: info
+  secretName: spicedb-secrets

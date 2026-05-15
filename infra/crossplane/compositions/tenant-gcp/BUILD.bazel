@@ -1,0 +1,66 @@
+"""L2 tests for the tenant-gcp Composition (#15).
+
+Mirrors tenant-namespace's pattern: an envtest validating admission +
+structural shape against Crossplane v2.2.1 meta-CRDs, and a render test
+validating crank-render output kinds.
+"""
+
+load("@rules_crossplane//:defs.bzl", "crossplane_render_test")
+load("@rules_kubernetes//:defs.bzl", "kubernetes_manifest", "kubernetes_server")
+load("//tools/bazel:itest.bzl", "itest_suite")
+
+kubernetes_manifest(
+    name = "tenant_gcp_envtest_manifests",
+    srcs = [
+        "//infra/crossplane/vendor:apiextensions.crossplane.io_compositeresourcedefinitions.yaml",
+        "//infra/crossplane/vendor:apiextensions.crossplane.io_compositions.yaml",
+        "//infra/crossplane/xrds:xtenant.yaml",
+        "composition.yaml",
+    ],
+)
+
+kubernetes_server(
+    name = "tenant_gcp_envtest_k8s",
+    manifests = ":tenant_gcp_envtest_manifests",
+)
+
+sh_binary(
+    name = "tenant_gcp_smoke_bin",
+    srcs = ["//infra/crossplane/compositions/tenant-gcp/testdata:smoke.sh"],
+    tags = ["manual"],
+)
+
+itest_suite(
+    name = "tenant_gcp_envtest",
+    servers = {
+        "k8s": ":tenant_gcp_envtest_k8s",
+    },
+    test = ":tenant_gcp_smoke_bin",
+)
+
+# Hermetic crank-render test: same pattern as tenant-namespace's
+# render test, with GCP-flavored XTenant fixture (compositionSelector
+# pinned to provider:gcp).
+crossplane_render_test(
+    name = "tenant_gcp_render",
+    composite = "//infra/crossplane/compositions/tenant-gcp/testdata:valid-xtenant-gcp.yaml",
+    composition = "composition.yaml",
+    functions = [
+        "//infra/crossplane/functions:patch-and-transform.yaml",
+    ],
+    expected_kinds = [
+        "XTenant",
+        "Namespace",
+        "Cluster",
+        "Policy",
+        "AuthBackendRole",
+        "ExternalSecret",
+        "ServiceAccount",            # iam.gcp.upbound.io
+        "ServiceAccountIAMMember",   # iam.gcp.upbound.io
+    ],
+    tags = [
+        "impure",
+        "no-sandbox",
+        "requires-docker",
+    ],
+)

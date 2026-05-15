@@ -1,0 +1,29 @@
+# Temporal platform — operator + CNPG Cluster + TemporalCluster CR.
+# Sync ordering:
+#   wave 0 — cert-manager + cnpg (deps)
+#   wave 1 — Temporal CRDs from operator-crds.yaml
+#   wave 2 — temporal-operator Deployment (operator-bootstrap.yaml)
+#   wave 3 — TemporalCluster CR (temporalcluster.yaml) + CNPG cluster
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: temporal
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: monok8s
+  source:
+    repoURL: https://github.com/monok8s-org/monok8s-dev
+    targetRevision: main
+    path: platform/temporal
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: temporal
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

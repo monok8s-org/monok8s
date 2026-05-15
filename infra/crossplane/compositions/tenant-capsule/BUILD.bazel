@@ -1,0 +1,95 @@
+"""L2 tests for the tenant-capsule Composition (#81).
+
+Two layers, mirroring //infra/crossplane/compositions/tenant-namespace:
+
+  * `tenant_capsule_envtest` — kube-apiserver+etcd via rules_kubernetes;
+    pre-applies Crossplane meta-CRDs + Capsule Tenant CRD + Cilium
+    CiliumNetworkPolicy CRD + XTenant XRD + this Composition. Smoke
+    asserts admission + structural shape (compositeTypeRef, mode,
+    resource list, provider label).
+
+  * `tenant_capsule_render` — `crank render` via rules_crossplane;
+    asserts the Composition+XR fixture renders to
+    [XTenant, Tenant, Namespace, CiliumNetworkPolicy]. No cluster
+    needed; closes the per-tenant Capsule pattern's render coverage
+    that the legacy `tenant-namespace` Composition didn't carry.
+"""
+
+load("@rules_crossplane//:defs.bzl", "crossplane_render_test")
+load("@rules_kubernetes//:defs.bzl", "kubernetes_manifest", "kubernetes_server")
+load("//tools/bazel:itest.bzl", "itest_suite")
+
+exports_files(
+    ["composition.yaml"],
+    visibility = ["//visibility:public"],
+)
+
+kubernetes_manifest(
+    name = "tenant_capsule_envtest_manifests",
+    srcs = [
+        # Crossplane meta-CRDs.
+        "//infra/crossplane/vendor:apiextensions.crossplane.io_compositeresourcedefinitions.yaml",
+        "//infra/crossplane/vendor:apiextensions.crossplane.io_compositions.yaml",
+        # Capsule Tenant CRD (Capsule 0.10.4, sliced from the install
+        # bundle — see infra/crossplane/vendor/README.md).
+        "//infra/crossplane/vendor:capsule.clastix.io_tenants.yaml",
+        # Cilium CiliumNetworkPolicy CRD (Cilium 1.16.5, upstream).
+        "//infra/crossplane/vendor:cilium.io_ciliumnetworkpolicies.yaml",
+        # XTenant XRD (the type this Composition reconciles).
+        "//infra/crossplane/xrds:xtenant.yaml",
+        # The Composition under test.
+        "composition.yaml",
+    ],
+)
+
+kubernetes_server(
+    name = "tenant_capsule_envtest_k8s",
+    manifests = ":tenant_capsule_envtest_manifests",
+)
+
+sh_binary(
+    name = "tenant_capsule_smoke_bin",
+    srcs = ["//infra/crossplane/compositions/tenant-capsule/testdata:smoke.sh"],
+    tags = ["manual"],
+)
+
+# L2 envtest: brings up kube-apiserver+etcd with all required CRDs +
+# XRD + this Composition pre-applied, then asserts the Composition is
+# admitted and structurally well-formed (right compositeTypeRef, right
+# resource list, right provider label).
+itest_suite(
+    name = "tenant_capsule_envtest",
+    servers = {
+        "k8s": ":tenant_capsule_envtest_k8s",
+    },
+    tags = ["impure"],
+    test = ":tenant_capsule_smoke_bin",
+)
+
+# L2 render test: hermetic `crank render` of the Composition + XR
+# fixture + function-patch-and-transform manifest. Asserts the renderer
+# produces the expected child-resource kinds.
+#
+# `requires-docker` + `no-sandbox` per the rules_crossplane contract:
+# composition functions execute via Docker (crank's own contract).
+# Same posture as tenant-namespace_render — accepted under Discussion
+# #4 Gap 2.
+crossplane_render_test(
+    name = "tenant_capsule_render",
+    composite = "//infra/crossplane/compositions/tenant-capsule/testdata:valid-xtenant-capsule.yaml",
+    composition = "composition.yaml",
+    expected_kinds = [
+        "XTenant",
+        "Tenant",
+        "Namespace",
+        "CiliumNetworkPolicy",
+    ],
+    functions = [
+        "//infra/crossplane/functions:patch-and-transform.yaml",
+    ],
+    tags = [
+        "impure",
+        "no-sandbox",
+        "requires-docker",
+    ],
+)

@@ -1,0 +1,66 @@
+# apply-tenant-migrations — Argo Workflow step that applies the
+# committed Atlas migration set to a per-tenant CNPG cluster (#86).
+#
+# Submitted by the Temporal tenant-create workflow (Tier-2 #84) per
+# Discussion #76's design ("Argo Workflows as Temporal's
+# cluster-mutation sub-step orchestrator"). Lands here as a
+# manifest-only artifact for now — the Argo Workflows operator install
+# is a separate Issue (filed during this PR; bootstrap-split shape).
+#
+# The container image referenced below is produced by a follow-up
+# OCI-image-build Issue. Until that lands the image reference is a
+# placeholder; #84's wiring is what first depends on a live image.
+#
+# NATS publish on exit (both success + failure) surfaces step status
+# on `workflow.tenant.<tid>.migrations` for the UI / CLI's live-tail
+# subscription (Tier-2 #88 wires the SSE channel that consumes these).
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: apply-tenant-migrations
+  labels:
+    monok8s.io/component: tenant-migrations
+spec:
+  entrypoint: apply
+  arguments:
+    parameters:
+      - name: tenantId
+        description: Tenant slug — the runner resolves the per-tenant CNPG Secret in namespace `tenant-<tenantId>`.
+  templates:
+    - name: apply
+      inputs:
+        parameters:
+          - name: tenantId
+      onExit: publish-status
+      container:
+        image: harbor.monok8s.internal/monok8s/migrate-apply:latest
+        command:
+          - /usr/local/bin/migrate-apply
+          - --tenant
+          - "{{inputs.parameters.tenantId}}"
+        # The runner reads the per-tenant CNPG Secret via the workflow
+        # ServiceAccount's RBAC. Grant via the Capsule Tenant CR's
+        # owner-bound ServiceAccount (#81) + a Role binding the
+        # `<tid>-app-app` Secret get/list.
+        env:
+          - name: KUBECONFIG
+            value: ""  # in-cluster service-account auth
+    - name: publish-status
+      inputs:
+        parameters:
+          - name: tenantId
+            value: "{{workflow.parameters.tenantId}}"
+          - name: status
+            value: "{{workflow.status}}"
+      container:
+        image: natsio/nats-box:latest
+        command:
+          - sh
+          - -c
+          - >
+            nats pub
+            "workflow.tenant.{{inputs.parameters.tenantId}}.migrations"
+            "{{inputs.parameters.status}}"
+        env:
+          - name: NATS_URL
+            value: nats://nats.nats.svc.cluster.local:4222

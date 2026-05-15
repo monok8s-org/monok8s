@@ -1,0 +1,4 @@
+exports_files(
+    ["patch-and-transform.yaml"],
+    visibility = ["//infra/crossplane:__subpackages__"],
+)

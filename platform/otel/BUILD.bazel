@@ -1,0 +1,8 @@
+"""otel bootstrap shape smoke (#25)."""
+
+sh_test(
+    name = "otel_smoke",
+    srcs = ["//platform/otel/testdata:smoke.sh"],
+    data = ["bootstrap.yaml"],
+    tags = ["pure"],
+)

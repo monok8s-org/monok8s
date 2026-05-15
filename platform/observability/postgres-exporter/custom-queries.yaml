@@ -1,0 +1,114 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-exporter-queries
+  namespace: monok8s-platform
+data:
+  queries.yaml: |
+
+    # ── Bloat / VACUUM health ──────────────────────────────────────────────────
+    # Critical for bitemporal event tables — corrections create dead tuples.
+    # Alert threshold: dead_tuple_ratio > 0.2 on any *_events table.
+
+    pg_dead_tuple_ratio:
+      query: |
+        SELECT schemaname, relname,
+               n_dead_tup,
+               n_live_tup,
+               CASE WHEN n_live_tup > 0
+                    THEN n_dead_tup::float / n_live_tup
+                    ELSE 0
+               END AS dead_tuple_ratio,
+               EXTRACT(EPOCH FROM (now() - last_autovacuum))  AS seconds_since_autovacuum,
+               EXTRACT(EPOCH FROM (now() - last_autoanalyze)) AS seconds_since_autoanalyze
+        FROM   pg_stat_user_tables
+        WHERE  relname LIKE '%_events' OR relname LIKE '%_snapshots'
+      metrics:
+        - schemaname:               { usage: LABEL }
+        - relname:                  { usage: LABEL }
+        - n_dead_tup:               { usage: GAUGE, description: "Dead tuples" }
+        - n_live_tup:               { usage: GAUGE, description: "Live tuples" }
+        - dead_tuple_ratio:         { usage: GAUGE, description: "Dead/live ratio" }
+        - seconds_since_autovacuum: { usage: GAUGE, description: "Seconds since last autovacuum" }
+        - seconds_since_autoanalyze:{ usage: GAUGE, description: "Seconds since last autoanalyze" }
+
+    # ── Table + index sizes ────────────────────────────────────────────────────
+    # Signal for when to add range partitions to event tables (alert at 80GB).
+
+    pg_table_size_bytes:
+      query: |
+        SELECT schemaname, relname,
+               pg_total_relation_size(relid) AS total_bytes,
+               pg_relation_size(relid)       AS table_bytes,
+               pg_indexes_size(relid)        AS index_bytes
+        FROM   pg_stat_user_tables
+        ORDER  BY total_bytes DESC
+        LIMIT  20
+      metrics:
+        - schemaname:  { usage: LABEL }
+        - relname:     { usage: LABEL }
+        - total_bytes: { usage: GAUGE, description: "Total size including indexes" }
+        - table_bytes: { usage: GAUGE, description: "Table data size" }
+        - index_bytes: { usage: GAUGE, description: "Index size" }
+
+    # ── Connection state breakdown ─────────────────────────────────────────────
+    # Shows idle-in-transaction connections (long txn signal) and wait events.
+
+    pg_connections_by_state:
+      query: |
+        SELECT state,
+               COALESCE(wait_event_type, 'none') AS wait_event_type,
+               count(*) AS count
+        FROM   pg_stat_activity
+        WHERE  datname = current_database()
+        GROUP  BY state, wait_event_type
+      metrics:
+        - state:           { usage: LABEL }
+        - wait_event_type: { usage: LABEL }
+        - count:           { usage: GAUGE, description: "Connection count by state" }
+
+    # ── Oldest active transaction ──────────────────────────────────────────────
+    # Long-running transactions block VACUUM. Alert at 5 minutes.
+
+    pg_oldest_transaction_seconds:
+      query: |
+        SELECT COALESCE(
+            EXTRACT(EPOCH FROM (now() - min(xact_start))),
+            0
+        ) AS seconds
+        FROM pg_stat_activity
+        WHERE state != 'idle'
+          AND xact_start IS NOT NULL
+      metrics:
+        - seconds: { usage: GAUGE, description: "Oldest active transaction age in seconds" }
+
+    # ── Index usage ────────────────────────────────────────────────────────────
+    # Unused indexes waste write throughput on event tables. Review quarterly.
+
+    pg_unused_indexes:
+      query: |
+        SELECT schemaname, relname, indexrelname,
+               idx_scan,
+               pg_relation_size(indexrelid) AS index_bytes
+        FROM   pg_stat_user_indexes
+        WHERE  idx_scan < 50
+          AND  relname LIKE '%_events'
+      metrics:
+        - schemaname:   { usage: LABEL }
+        - relname:      { usage: LABEL }
+        - indexrelname: { usage: LABEL }
+        - idx_scan:     { usage: GAUGE, description: "Number of index scans" }
+        - index_bytes:  { usage: GAUGE, description: "Index size in bytes" }
+
+    # ── Replication lag ────────────────────────────────────────────────────────
+
+    pg_replication_lag_seconds:
+      query: |
+        SELECT client_addr,
+               EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) AS lag_seconds,
+               CASE WHEN pg_is_in_recovery() THEN 1 ELSE 0 END AS is_replica
+        FROM   pg_stat_replication
+      metrics:
+        - client_addr:  { usage: LABEL }
+        - lag_seconds:  { usage: GAUGE, description: "Replication lag in seconds" }
+        - is_replica:   { usage: GAUGE }

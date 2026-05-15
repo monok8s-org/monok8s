@@ -1,0 +1,19 @@
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-azure
+spec:
+  package: xpkg.upbound.io/upbound/provider-azure:v0.42.0
+  controllerConfigRef:
+    name: provider-azure-config
+---
+apiVersion: pkg.crossplane.io/v1alpha1
+kind: ControllerConfig
+metadata:
+  name: provider-azure-config
+spec:
+  # Workload Identity annotation is set at deploy time with the client ID
+  # from Terraform output (crossplane_client_id)
+  # azure.workload.identity/client-id: <client_id>
+  args:
+    - --debug

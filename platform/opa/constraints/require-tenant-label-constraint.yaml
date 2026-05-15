@@ -1,0 +1,26 @@
+# Constraint instance: enforce require-tenant-label on every Namespace.
+#
+# Gatekeeper's controller generates the `K8sRequiredTenantLabel` CRD from
+# the ConstraintTemplate (sibling file) at install time. This Constraint
+# binds the rule to actual Namespaces and refuses admission of any that
+# lack `monok8s.io/tenant`. AC#4 of #17.
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredTenantLabel
+metadata:
+  name: namespace-must-have-tenant-label
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Namespace"]
+    # System namespaces are exempt — they predate Capsule's tenancy and
+    # their lifecycle is platform-owned.
+    excludedNamespaces:
+      - kube-system
+      - kube-public
+      - kube-node-lease
+      - argocd
+      - capsule-system
+      - gatekeeper-system
+      - cert-manager
+  enforcementAction: deny

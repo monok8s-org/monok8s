@@ -1,0 +1,32 @@
+"""platform/monok8s-bootstrap — install-time admin tenant bootstrap Job (#98a).
+
+L1 sh_test asserts the Job + RBAC + ArgoCD Application + Secret
+template manifests are structurally well-formed via kubectl --dry-run
++ grep on key invariants (SA reference, namespace, Secret mounts).
+
+L4 rules_kind end-to-end test — install the platform on a fresh kind
+cluster, kubectl-apply the bootstrap-admin Secret, wait for the Job
+to complete, assert XTenant `system` exists + Zitadel admin user
+created + SpiceDB system:monok8s relation written — lands in #98b
+(sibling Issue).
+"""
+
+exports_files(
+    [
+        "bootstrap-job.yaml",
+        "rbac.yaml",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "smoke",
+    srcs = ["testdata/smoke.sh"],
+    data = [
+        "argocd-app.yaml",
+        "bootstrap-job.yaml",
+        "rbac.yaml",
+        "secret-template.yaml",
+    ],
+    tags = ["pure"],
+)

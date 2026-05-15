@@ -1,0 +1,9 @@
+# The `argo` namespace for the L2 workflow_itest target.
+#
+# activities_argo.go's `submitArgoWorkflowAndWait` submits Workflow CRs
+# into this namespace (hardcoded `argoNamespace = "argo"`, matching
+# the upstream Argo Workflows install convention).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argo

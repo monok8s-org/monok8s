@@ -1,0 +1,32 @@
+"""Zitadel platform install + bootstrap Job shape smoke (#22).
+
+L1 sh_test asserts the install bundle (Zitadel + Jobs + Service) +
+CNPG Cluster CR + bootstrap Job (monok8s project + monok8s-spa PKCE
+client + consumer ConfigMap + RBAC) are structurally well-formed.
+
+L3 rules_itest test (pg + zitadel + JWT round-trip via packages/auth)
+is AC#4 of #22 — deferred to #33 (packages/auth) since the auth
+helper is the natural test subject. Until then the install is exercised
+only structurally; the L4 demo path in #37 covers full Zitadel ->
+JWT -> packages/auth round-trip end-to-end.
+"""
+
+exports_files(
+    [
+        "bootstrap.yaml",
+        "bootstrap-job.yaml",
+        "cluster.yaml",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "zitadel_smoke",
+    srcs = ["//platform/zitadel/testdata:smoke.sh"],
+    data = [
+        "bootstrap.yaml",
+        "bootstrap-job.yaml",
+        "cluster.yaml",
+    ],
+    tags = ["pure"],
+)

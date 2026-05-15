@@ -1,0 +1,7 @@
+exports_files(
+    [
+        "smoke.sh",
+        "valid-xtenant-database.yaml",
+    ],
+    visibility = ["//infra/crossplane/compositions/tenant-database-cnpg:__pkg__"],
+)

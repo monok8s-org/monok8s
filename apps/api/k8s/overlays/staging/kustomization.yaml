@@ -1,0 +1,30 @@
+# apps/api staging overlay — digest-pinned image entry that the
+# Tekton apps-api-build pipeline (#28) updates after every successful
+# build → push → sign chain. ArgoCD's apps/argocd/apps/api.yaml
+# Application points here for the staging environment.
+#
+# Per #28 AC#5: gitops-update commits the new digest into this file.
+# The placeholder digest below is replaced sed-in-place by the Task;
+# it must match the pattern `sha256:[a-f0-9]{64}` exactly so the sed
+# expression resolves.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# 2-replica staging vs. prod's 4. Hard-cap at this level (the Capsule
+# Tenant template caps tenant-scoped namespaces; this is a platform
+# namespace and uses a direct patch).
+patches:
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+    target:
+      kind: Deployment
+      name: api
+
+images:
+  - name: harbor.monok8s.internal/monok8s/api
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

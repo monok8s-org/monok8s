@@ -1,0 +1,4 @@
+exports_files(
+    ["smoke.sh"],
+    visibility = ["//platform/argocd:__pkg__"],
+)

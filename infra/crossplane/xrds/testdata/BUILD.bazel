@@ -1,0 +1,7 @@
+exports_files(
+    [
+        "smoke.sh",
+        "valid-xtenant.yaml",
+    ],
+    visibility = ["//infra/crossplane:__subpackages__"],
+)

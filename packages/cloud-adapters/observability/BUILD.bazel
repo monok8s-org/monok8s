@@ -1,0 +1,94 @@
+"""Cloud-adapter observability axis (#80, #105) — TS + Go libs + contract tests.
+
+Go + TS: real bare-metal OTLP push impls. Each PushLogs/PushMetrics/
+PushTraces method wraps records into the canonical OTLP/HTTP/JSON
+envelope and POSTs to the per-signal endpoint (Loki/Mimir/Tempo OTLP
+receivers, or an OTel Collector that dispatches per-signal). No
+opentelemetry-collector-contrib or otel SDK dep — the OTLP envelope
+shape is small enough to build inline; this keeps the dep weight
+minimal and the contract tests hermetic.
+"""
+
+load("@aspect_rules_jest//jest:defs.bzl", "jest_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config", "ts_project")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# ── TypeScript ──────────────────────────────────────────────────────────
+
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    deps = ["//:tsconfig"],
+)
+
+ts_project(
+    name = "lib",
+    srcs = glob(
+        ["*.ts"],
+        exclude = ["*.test.ts"],
+    ),
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//:node_modules/@types/node",
+    ],
+)
+
+ts_project(
+    name = "lib_test",
+    srcs = glob(["*.test.ts"]),
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        ":lib",
+        "//:node_modules/@jest/globals",
+        "//:node_modules/@types/jest",
+        "//:node_modules/@types/node",
+        "//:node_modules/jest",
+    ],
+)
+
+jest_test(
+    name = "contract_test",
+    config = "//:jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/babel-jest",
+        "//:node_modules/babel-preset-solid",
+        "//:node_modules/jest-environment-jsdom",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["impure"],
+)
+
+# ── Go ──────────────────────────────────────────────────────────────────
+
+go_library(
+    name = "observability",
+    srcs = [
+        "aws.go",
+        "azure.go",
+        "baremetal.go",
+        "gcp.go",
+        "interface.go",
+    ],
+    importpath = "github.com/monok8s/monok8s/packages/cloud-adapters/observability",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "observability_test",
+    srcs = ["baremetal_test.go"],
+    embed = [":observability"],
+    tags = ["impure"],
+)

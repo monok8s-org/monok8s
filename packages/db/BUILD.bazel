@@ -1,0 +1,442 @@
+load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
+load("@aspect_rules_jest//jest:defs.bzl", "jest_test")
+load("@aspect_rules_js//js:defs.bzl", "js_binary")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config", "ts_project")
+load("@rules_atlas//:defs.bzl", "atlas_migrate_diff_run", "atlas_migrate_lint_test", "atlas_schema_test")
+load("@rules_pg//:defs.bzl", "pg_server", "pg_test", "postgres_schema")
+load("//tools/bazel:atlas.bzl", "atlas_migrate_apply_run")
+
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    deps = ["//:tsconfig"],
+)
+
+# ---------------------------------------------------------------------------
+# Schema — the canonical migration set, applied in numeric order.
+#
+# Restricted to 001 + 002 in this PR. Migrations 003-007 (scaffolding from
+# #43/#44, never applied to any environment) reference a `tenant_memberships`
+# snapshot table that 002 forgot to create — the L2 test added in #34
+# discovered this as the first apply attempt. Tracked as a new gap in
+# Discussion #45; cleanup PR will add the missing snapshot table (or a
+# `002a_tenant_memberships.sql` fix-forward) and re-include the rest.
+#
+# packages/db/partman/setup.sql is intentionally excluded — it depends on
+# pg_partman + pg_cron extensions that aren't part of the base schema and
+# only activate operationally when an event table approaches 80GB
+# (deferred to 0.2.0 per Discussion #3 scoping).
+# ---------------------------------------------------------------------------
+
+postgres_schema(
+    name = "schema",
+    srcs = [
+        "migrations/001_initial.sql",
+        "migrations/002_user_principal.sql",
+        # 009 (groups, #87b / #174) is self-contained — FK only to
+        # tenants from 001 — so it lands here ahead of 003-007's
+        # Gap-19 cleanup. The numeric gap (skipping 003-007) is fine:
+        # postgres_schema applies srcs in list order, not
+        # filesystem-discovery order, so the missing intermediate
+        # numbers don't break anything.
+        "migrations/009_groups.sql",
+    ],
+)
+
+# Migration 008 exposed as a filegroup for cross-package L2 itests
+# (apps/api/test/events_audit_l2_test.ts inlines the schema at test
+# startup since the canonical :schema target only includes 001+002
+# today per Gap 19). When Gap 19 closes and the full migration set
+# re-enters :schema, 008 lands there alongside the others; this
+# filegroup stays as a stable cross-package handle for tests that
+# want the audit_log DDL specifically without the full set.
+filegroup(
+    name = "audit_log_migration",
+    srcs = ["migrations/008_audit_log.sql"],
+    visibility = ["//visibility:public"],
+)
+
+# ---------------------------------------------------------------------------
+# TypeScript library — pool + tenants + users query helpers consumed by
+# apps/api and apps/workers/*. Exports are deliberately small per
+# packages/CLAUDE.md ("keep the public surface area small").
+# ---------------------------------------------------------------------------
+
+ts_project(
+    name = "lib",
+    srcs = glob(
+        ["src/**/*.ts"],
+        exclude = ["src/**/*.test.ts"],
+    ),
+    # declaration = True emits .d.ts files so :lib_test below can
+    # `import` from ./pool etc. and resolve types via lib's declaration
+    # output. `preserve_jsx = True` matches the root tsconfig.json's
+    # `compilerOptions.jsx = "preserve"` (set there for SolidJS frontend
+    # builds; affects ts_project validation here even though packages/db
+    # has no JSX).
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//:node_modules/@types/node",
+        "//:node_modules/@types/pg",
+        "//:node_modules/pg",
+    ],
+)
+
+# Compiled test sources. Separated from :lib so production builds don't
+# pull in @jest/globals transitively.
+ts_project(
+    name = "lib_test",
+    srcs = glob(["src/**/*.test.ts"]),
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        ":lib",
+        "//:node_modules/@jest/globals",
+        "//:node_modules/@types/jest",
+        "//:node_modules/@types/node",
+        "//:node_modules/@types/pg",
+        "//:node_modules/jest",
+        "//:node_modules/pg",
+    ],
+)
+
+# L2 integration test for pool.ts — runs against rules_pg's ephemeral
+# Postgres. The bash wrapper creates two per-tenant databases on the
+# instance, then invokes the compiled TS driver which exercises
+# makePoolFactory with concurrent inserts/selects + isolation
+# assertions. Tagged `impure`, `pg`.
+ts_project(
+    name = "pool_l2_test_lib",
+    srcs = ["test/pool_l2_test.ts"],
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        ":lib",
+        "//:node_modules/@types/node",
+        "//:node_modules/@types/pg",
+        "//:node_modules/pg",
+    ],
+)
+
+pg_test(
+    name = "pool_test",
+    srcs = ["test/pool_l2_test.sh"],
+    data = [
+        ":lib",
+        ":pool_l2_test_lib",
+        "//:node_modules/pg",
+    ],
+    schema = ":_dev_pg_empty_schema",
+    size = "medium",
+    tags = [
+        "impure",
+        "pg",
+    ],
+)
+
+# L1 unit test for pool.ts — mocks pg.Pool entirely. No Postgres
+# needed. Tagged `pure`. Covers LRU eviction, idle timeout, concurrent
+# first-access race coalescing, and defensive pool.end() handling.
+jest_test(
+    name = "pool_unit_test",
+    config = ":jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/babel-jest",
+        "//:node_modules/pg",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)
+
+# Per-package Jest config (testEnvironment: "node"); see jest.config.js
+# for the version-skew rationale.
+copy_to_bin(
+    name = "jest_config",
+    srcs = ["jest.config.js"],
+)
+
+# ---------------------------------------------------------------------------
+# L2 hermetic schema test — rules_pg launcher applies the migration set
+# against an ephemeral cluster, then execs the smoke script.
+# ---------------------------------------------------------------------------
+
+pg_test(
+    name = "schema_test",
+    srcs = ["test/schema_test.sh"],
+    schema = ":schema",
+    size = "medium",
+    tags = [
+        "impure",
+        "pg",
+    ],
+)
+
+# ── Benchmarks (#166 Phase A) ─────────────────────────────────────────────
+#
+# Bench targets are tagged `bench`. The repo's default test_tag_filters
+# in .bazelrc excludes them from `bazel test //...`. CI / on-demand
+# runs invoke with `--test_tag_filters=bench`. Phase B (follow-up
+# Issue) will add scheduled GHA workflow + result capture to
+# TEST_UNDECLARED_OUTPUTS_DIR + threshold-based regression detection.
+#
+# Each bench target:
+#   - Applies the canonical migration schema (so the tables exist).
+#   - Launcher seeds the canonical bench rows + invokes pgbench.
+#   - Bench script lives at packages/db/bench/<name>.sql.
+
+pg_test(
+    name = "bench_tenants_find_by_id",
+    srcs = ["bench/tenants_find_by_id_bench.sh"],
+    data = ["bench/tenants_find_by_id.sql"],
+    schema = ":schema",
+    size = "medium",
+    tags = [
+        "bench",
+        "impure",
+        "pg",
+    ],
+)
+
+# Phase B (#189) — second bench target. Mirrors tenants_find_by_id
+# against the users table so the regression checker exercises more
+# than one slug + the fixture-seeding pattern generalizes.
+pg_test(
+    name = "bench_users_find_by_id",
+    srcs = ["bench/users_find_by_id_bench.sh"],
+    data = ["bench/users_find_by_id.sql"],
+    schema = ":schema",
+    size = "medium",
+    tags = [
+        "bench",
+        "impure",
+        "pg",
+    ],
+)
+
+# ── Bench Phase B regression checker (#189 B2) ─────────────────────────────
+#
+# Pure TypeScript parser + threshold comparator. Hermetic via jest_test
+# for the L1 surface; runnable via js_binary so the bench GHA workflow
+# invokes `bazel run //packages/db/bench:check_regression -- <args>`.
+# Baseline files live at packages/db/bench/baseline/<bench-name>.json.
+
+ts_project(
+    name = "check_regression_lib",
+    srcs = [
+        "bench/check_regression.ts",
+        "bench/check_regression_main.ts",
+    ],
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        "//:node_modules/@types/node",
+    ],
+)
+
+js_binary(
+    name = "check_regression",
+    data = [":check_regression_lib"],
+    entry_point = "bench/check_regression_main.js",
+)
+
+ts_project(
+    name = "check_regression_test_lib",
+    srcs = ["bench/check_regression.test.ts"],
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        ":check_regression_lib",
+        "//:node_modules/@jest/globals",
+        "//:node_modules/@types/jest",
+        "//:node_modules/@types/node",
+        "//:node_modules/jest",
+    ],
+)
+
+jest_test(
+    name = "check_regression_test",
+    config = ":jest_config",
+    data = [
+        ":check_regression_lib",
+        ":check_regression_test_lib",
+        "//:babel_config",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/babel-jest",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)
+
+# Baseline JSON exposed so consumers (release tooling, etc.) can
+# reference the per-bench baseline files via Bazel labels.
+filegroup(
+    name = "bench_baseline",
+    srcs = glob(["bench/baseline/*.json"]),
+    visibility = ["//visibility:public"],
+)
+
+# Bench-log collector shell script — extracted from .github/workflows/bench.yml
+# inline run-step so the find+sed slug logic is unit-testable via sh_test
+# under Bazel. The workflow invokes the script directly via `bash`, not
+# `bazel run`, to avoid bazel startup overhead in the CI artifact-collection
+# step.
+sh_binary(
+    name = "collect_bench_logs",
+    srcs = ["bench/collect_bench_logs.sh"],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "collect_bench_logs_test",
+    srcs = ["bench/collect_bench_logs_test.sh"],
+    args = ["$(rootpath bench/collect_bench_logs.sh)"],
+    data = ["bench/collect_bench_logs.sh"],
+    tags = ["pure"],
+)
+
+# ---------------------------------------------------------------------------
+# atlas schema fmt — assert migrations stay fmt-clean (no diff vs. canonical).
+# ---------------------------------------------------------------------------
+
+atlas_schema_test(
+    name = "schema_fmt_test",
+    srcs = glob(["migrations/*.sql"]),
+    tags = ["pure"],
+)
+
+# ---------------------------------------------------------------------------
+# Hermetic dev Postgres for atlas migrate-diff and migrate-lint.
+#
+# Empty-schema cluster: atlas spins migrations against it on each
+# invocation (migrate-diff treats it as the empty starting state;
+# migrate-lint just needs the engine grammar). rules_atlas v0.3 launches
+# this in the background, polls for the env file, expands the dev URL
+# from PG* env vars.
+# ---------------------------------------------------------------------------
+
+postgres_schema(
+    name = "_dev_pg_empty_schema",
+    srcs = [],
+)
+
+pg_server(
+    name = "dev_pg",
+    schema = ":_dev_pg_empty_schema",
+)
+
+# ---------------------------------------------------------------------------
+# `bazel run //packages/db:migrate-diff -- <name>` generates a new
+# migration file by computing the diff between atlas.hcl's `src` (the
+# committed migration history) and the empty hermetic dev URL above.
+# Closes #34 AC#4 and Discussion #4 Hermeticity Gap 4.
+# ---------------------------------------------------------------------------
+
+atlas_migrate_diff_run(
+    name = "migrate-diff",
+    atlas_config = "atlas.hcl",
+    dev_service = ":dev_pg",
+    env = "local",
+    migrations = glob(["migrations/*.sql"]),
+)
+
+# ---------------------------------------------------------------------------
+# `atlas migrate lint` against the hermetic Postgres dev URL —
+# destructive-change static analysis on the latest migration.
+#
+# Scoped to 001 + 002 in lock-step with `schema` above. atlas migrate
+# lint applies every prior migration to the dev cluster before linting
+# the latest, so it hits the same Gap 19 blocker (003+'s missing
+# `tenant_memberships` table) as `schema_test`. The lint coverage
+# widens to the full glob when Gap 19's cleanup migration ships.
+# ---------------------------------------------------------------------------
+
+atlas_migrate_lint_test(
+    name = "migrate_lint_test",
+    dev_service = ":dev_pg",
+    migrations = [
+        "migrations/001_initial.sql",
+        "migrations/002_user_principal.sql",
+    ],
+    tags = ["impure"],
+)
+
+# ---------------------------------------------------------------------------
+# Single-tenant Atlas migration runner (#86).
+#
+# `bazel run //packages/db:migrate-apply -- --tenant <tid>` applies the
+# committed migration set against the per-tenant CNPG-managed Postgres
+# instance provisioned by the tenant-database-cnpg Composition (#82).
+#
+# Two invocation paths:
+#   1. Operator-time: `--tenant <tid>` arg + in-cluster kubectl resolves
+#      the connection URL from the tenant-namespace's `<cluster>-app`
+#      Secret (CNPG-emitted).
+#   2. Test-time: TENANT_DATABASE_URL pre-set; arg parsing bypassed.
+#      Used by `:migrate_apply_test` below.
+#
+# Production invocation is via the `apply-tenant-migrations`
+# WorkflowTemplate at //platform/argo-workflows/templates/ — the
+# Argo Workflow step submits this binary inside the container image
+# produced by a follow-up OCI-build Issue.
+# ---------------------------------------------------------------------------
+
+atlas_migrate_apply_run(
+    name = "migrate-apply",
+    atlas_config = "atlas.hcl",
+    env = "tenant",
+    migrations = [
+        "migrations/001_initial.sql",
+        "migrations/002_user_principal.sql",
+        # atlas.sum: integrity checksum for the migration set above.
+        # Generated via `atlas migrate hash --dir file://packages/db/migrations`
+        # (over just 001 + 002, matching the :schema scope; widens
+        # when Discussion #45 Gap 19 closes and 003-007 re-enter).
+        "migrations/atlas.sum",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# ---------------------------------------------------------------------------
+# L2 pg_test: exercises the migrate-apply runner end-to-end against a
+# hermetic ephemeral Postgres. The runner reads TENANT_DATABASE_URL
+# (pre-set by the test script from rules_pg's PG* env vars) and runs
+# `atlas migrate apply --env tenant`. Asserts post-apply schema shape
+# via the same psql helpers as schema_test.sh.
+# ---------------------------------------------------------------------------
+
+postgres_schema(
+    name = "_empty_schema_for_apply",
+    srcs = [],
+)
+
+pg_test(
+    name = "migrate_apply_test",
+    srcs = ["test/migrate_apply_test.sh"],
+    schema = ":_empty_schema_for_apply",
+    size = "medium",
+    tags = [
+        "impure",
+        "pg",
+    ],
+    data = [":migrate-apply"],
+)

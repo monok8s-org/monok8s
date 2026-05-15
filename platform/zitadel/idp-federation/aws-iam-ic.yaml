@@ -1,0 +1,97 @@
+# Zitadel upstream IdP: AWS IAM Identity Center
+#
+# Allows enterprise users who authenticate via AWS IAM Identity Center (formerly
+# AWS SSO) to sign in to monok8s using that same identity. Useful when the
+# customer's primary identity plane is AWS.
+#
+# AWS IAM Identity Center supports OIDC for external service providers.
+# The OIDC issuer URL and client credentials are obtained from the IAM
+# Identity Center console.
+#
+# Setup steps (AWS side):
+#   1. In IAM Identity Center console:
+#        Applications → Add application → I have an application I want to set up
+#        Application type: OAuth 2.0
+#        Application URL: https://auth.monok8s.io
+#        Redirect URIs: https://auth.monok8s.io/ui/login/login/externalidp/callback
+#        Scopes: openid, profile, email, aws
+#
+#   2. Note the OIDC issuer URL:
+#        https://<instance-id>.awsapps.com/start/discovery_endpoint
+#        (shown in the application settings)
+#
+#   3. Store credentials in Vault:
+#        vault kv put secret/monok8s/idp/aws-iam-ic \
+#          client_id=<client_id> \
+#          client_secret=<client_secret> \
+#          issuer_url=https://<instance-id>.awsapps.com/start
+#
+# Note: AWS IAM Identity Center OIDC support is available on external
+# applications from 2024. The instance must have external OIDC enabled.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zitadel-idp-aws-iam-ic-config
+  namespace: zitadel
+  labels:
+    monok8s.io/managed: "true"
+    monok8s.io/purpose: idp-federation
+data:
+  config.json: |
+    {
+      "name": "AWS IAM Identity Center",
+      "type": "OIDC_IDP",
+      "oidc_config": {
+        "issuer_secret_ref": {
+          "vault_path": "secret/data/monok8s/idp/aws-iam-ic",
+          "key": "issuer_url"
+        },
+        "client_id_secret_ref": {
+          "vault_path": "secret/data/monok8s/idp/aws-iam-ic",
+          "client_id_key": "client_id",
+          "client_secret_key": "client_secret"
+        },
+        "scopes": ["openid", "profile", "email"],
+        "id_attribute": "sub",
+        "display_name_attribute": "name",
+        "email_attribute": "email",
+        "username_attribute": "email",
+        "is_auto_creation": false,
+        "is_auto_update": true,
+        "is_linking_allowed": true,
+        "is_creation_allowed": false
+      },
+      "styling_config": {
+        "button_label": "Sign in with AWS SSO",
+        "logo_url": "https://a0.awsstatic.com/libra-css/images/logos/aws_logo_smile_1200x630.png"
+      }
+    }
+
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: zitadel-idp-aws-iam-ic
+  namespace: zitadel
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: SecretStore
+  target:
+    name: zitadel-idp-aws-iam-ic
+    creationPolicy: Owner
+  data:
+    - secretKey: client_id
+      remoteRef:
+        key: secret/data/monok8s/idp/aws-iam-ic
+        property: client_id
+    - secretKey: client_secret
+      remoteRef:
+        key: secret/data/monok8s/idp/aws-iam-ic
+        property: client_secret
+    - secretKey: issuer_url
+      remoteRef:
+        key: secret/data/monok8s/idp/aws-iam-ic
+        property: issuer_url

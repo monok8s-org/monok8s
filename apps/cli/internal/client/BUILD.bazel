@@ -1,0 +1,8 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "client",
+    srcs = glob(["*.go"]),
+    importpath = "github.com/monok8s/monok8s/apps/cli/internal/client",
+    visibility = ["//apps/cli:__subpackages__"],
+)

@@ -1,0 +1,159 @@
+# bootstrap-job — creates the `monok8s` project + `monok8s-spa` PKCE
+# OAuth client in Zitadel on first install. Emits the resulting client
+# ID into a ConfigMap that the frontend bundle (#32) reads at boot
+# (or — equivalently — that the API exposes as a config endpoint).
+#
+# Idempotent: re-runs check whether the project + client already
+# exist by name and skip the create call. ArgoCD `PostSync` hook
+# triggers re-runs on every sync; idempotency means re-running is
+# safe.
+#
+# Per AC#3 of #22.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zitadel-bootstrap-script
+  namespace: zitadel
+data:
+  bootstrap.sh: |
+    #!/usr/bin/env sh
+    set -euo pipefail
+
+    # Wait for Zitadel admin API to be ready. The setup Job that
+    # initializes the admin user must complete first.
+    echo "[bootstrap] waiting for Zitadel admin API to be ready..."
+    until curl -sfL "$ZITADEL_API/admin/v1/healthz" > /dev/null; do
+        sleep 5
+    done
+    echo "[bootstrap] Zitadel admin API ready"
+
+    # Auth uses the admin service account JWT — provisioned by the
+    # zitadel-setup Job into the zitadel-admin-sa Secret. Token
+    # exchange via the JWT-bearer profile.
+    PAT=$(cat /etc/zitadel/admin-sa/pat)
+    AUTH="Authorization: Bearer $PAT"
+    JSON='Content-Type: application/json'
+
+    # Idempotent project create: query first, create only if absent.
+    PROJECT_ID=$(curl -sfL -X POST "$ZITADEL_API/management/v1/projects/_search" \
+        -H "$AUTH" -H "$JSON" \
+        -d '{"queries":[{"nameQuery":{"name":"monok8s","method":"TEXT_QUERY_METHOD_EQUALS"}}]}' \
+        | jq -r '.result[0].id // empty')
+    if [ -z "$PROJECT_ID" ]; then
+        echo "[bootstrap] creating monok8s project"
+        PROJECT_ID=$(curl -sfL -X POST "$ZITADEL_API/management/v1/projects" \
+            -H "$AUTH" -H "$JSON" \
+            -d '{"name":"monok8s"}' | jq -r '.id')
+    fi
+    echo "[bootstrap] project id: $PROJECT_ID"
+
+    # Idempotent OIDC PKCE client create.
+    CLIENT_ID=$(curl -sfL -X POST "$ZITADEL_API/management/v1/projects/$PROJECT_ID/apps/_search" \
+        -H "$AUTH" -H "$JSON" \
+        -d '{"queries":[{"nameQuery":{"name":"monok8s-spa","method":"TEXT_QUERY_METHOD_EQUALS"}}]}' \
+        | jq -r '.result[0].oidcConfig.clientId // empty')
+    if [ -z "$CLIENT_ID" ]; then
+        echo "[bootstrap] creating monok8s-spa PKCE client"
+        CLIENT_ID=$(curl -sfL -X POST "$ZITADEL_API/management/v1/projects/$PROJECT_ID/apps/oidc" \
+            -H "$AUTH" -H "$JSON" \
+            -d '{
+                "name": "monok8s-spa",
+                "appType": "OIDC_APP_TYPE_USER_AGENT",
+                "authMethodType": "OIDC_AUTH_METHOD_TYPE_NONE",
+                "responseTypes": ["OIDC_RESPONSE_TYPE_CODE"],
+                "grantTypes": ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE", "OIDC_GRANT_TYPE_REFRESH_TOKEN"],
+                "redirectUris": ["http://localhost:5173/auth/callback", "https://monok8s.example.com/auth/callback"],
+                "postLogoutRedirectUris": ["http://localhost:5173/", "https://monok8s.example.com/"],
+                "devMode": true,
+                "accessTokenType": "OIDC_TOKEN_TYPE_JWT"
+            }' | jq -r '.clientId')
+    fi
+    echo "[bootstrap] client id: $CLIENT_ID"
+
+    # Patch the consumer-facing ConfigMap with the resolved client id.
+    # The frontend reads this at build / boot time. Use server-side
+    # apply so the ConfigMap is owned by this Job (Kubernetes will
+    # auto-create on first run).
+    cat <<YAML | kubectl apply -f -
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: monok8s-zitadel-config
+      namespace: zitadel
+    data:
+      project_id: "$PROJECT_ID"
+      client_id:  "$CLIENT_ID"
+      issuer:     "$ZITADEL_API"
+    YAML
+    echo "[bootstrap] wrote monok8s-zitadel-config ConfigMap"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: zitadel-bootstrap-monok8s
+  namespace: zitadel
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: zitadel-bootstrap
+      containers:
+        - name: bootstrap
+          # alpine + curl + jq + kubectl baked in. Keeps the Job small
+          # without requiring a custom image build pipeline.
+          image: bitnami/kubectl:1.31
+          command: ["/bin/sh", "/scripts/bootstrap.sh"]
+          env:
+            - name: ZITADEL_API
+              value: http://zitadel.zitadel.svc.cluster.local:8080
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: admin-sa
+              mountPath: /etc/zitadel/admin-sa
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: zitadel-bootstrap-script
+            defaultMode: 0755
+        - name: admin-sa
+          secret:
+            secretName: zitadel-admin-sa
+---
+# RBAC for the bootstrap Job — needs to read/write ConfigMaps in the
+# zitadel namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: zitadel-bootstrap
+  namespace: zitadel
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: zitadel-bootstrap
+  namespace: zitadel
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: zitadel-bootstrap
+  namespace: zitadel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: zitadel-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: zitadel-bootstrap
+    namespace: zitadel

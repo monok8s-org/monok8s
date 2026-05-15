@@ -1,0 +1,34 @@
+# Deploy all Temporal workers across environments via ApplicationSet.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: workers
+  namespace: argocd
+spec:
+  generators:
+    - matrix:
+        generators:
+          - list:
+              elements:
+                - worker: onboarding
+                - worker: billing
+          - list:
+              elements:
+                - env: staging
+                - env: prod
+  template:
+    metadata:
+      name: "worker-{{worker}}-{{env}}"
+    spec:
+      project: monok8s
+      source:
+        repoURL: https://github.com/monok8s/monok8s
+        targetRevision: main
+        path: "apps/workers/{{worker}}/k8s/overlays/{{env}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "monok8s-{{env}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true

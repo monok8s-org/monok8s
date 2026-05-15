@@ -1,0 +1,44 @@
+# cert-manager Certificate CR — rotates the Model B mTLS client cert automatically.
+#
+# The initial cert is written by InstallationRegistrationWorkflow into the
+# `installation-client-cert` Secret. cert-manager takes over rotation after that,
+# renewing 4 hours before expiry (cert TTL is 24h → renews at 20h).
+#
+# The issuer points at Model A's Vault PKI via a cert-manager VaultIssuer.
+# VAULT_ADDR and VAULT_TOKEN are stored in the `vault-cert-issuer` Secret,
+# written by the registration Job.
+
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: model-a-vault-issuer
+  namespace: monok8s-platform
+spec:
+  vault:
+    server: "${VAULT_ADDR}"      # Model A's Vault address (e.g. https://vault.monok8s.io)
+    path: pki/installations/sign/installation-client
+    auth:
+      tokenSecretRef:
+        name: vault-cert-issuer
+        key: token
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: installation-client-cert
+  namespace: monok8s-platform
+spec:
+  secretName: installation-client-cert
+  issuerRef:
+    name: model-a-vault-issuer
+    kind: Issuer
+  # CN must be "installation/<installation_id>" — validated by telemetry-gateway
+  commonName: "installation/${INSTALLATION_ID}"
+  duration: 24h
+  renewBefore: 4h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always   # generate new key on every renewal
+  usages:
+    - client auth

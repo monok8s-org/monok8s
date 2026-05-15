@@ -1,0 +1,36 @@
+# CNPG override patches for the bundled Harbor manifest.
+#
+# Harbor's chart ships an internal `harbor-database` StatefulSet
+# (Bitnami postgresql subchart). The two patches in this file replace
+# that with a CNPG-backed Postgres provided by `cluster.yaml`:
+#
+#   1. Delete the harbor-database StatefulSet ($patch: delete).
+#   2. Re-point the harbor-database Service to ExternalName, aliasing
+#      the per-Harbor CNPG cluster's harbor-db-rw Service.
+#
+# Harbor's components consume Postgres via `POSTGRESQL_HOST:
+# harbor-database` (env var in the harbor-database-secret Secret). The
+# ExternalName Service preserves that hostname → workloads transparently
+# resolve through to the CNPG cluster.
+---
+# Patch 1: delete the internal Postgres StatefulSet entirely.
+$patch: delete
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: harbor-database
+  namespace: harbor
+---
+# Patch 2: replace the Service with an ExternalName alias to CNPG.
+apiVersion: v1
+kind: Service
+metadata:
+  name: harbor-database
+  namespace: harbor
+spec:
+  type: ExternalName
+  externalName: harbor-db-rw.harbor.svc.cluster.local
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP

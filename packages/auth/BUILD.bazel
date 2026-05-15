@@ -1,0 +1,182 @@
+"""packages/auth — canonical SpiceDB schema + L2 permissions test (#77).
+
+Go helper surface (canOnTenant, writeMemberJoined, canActOnMember, etc.)
+ships under packages/auth/go/, wired via the //packages/auth:auth
+go_library so apps/workers/onboarding's `deps = ["//packages/auth"]`
+resolves (#107). Real helper implementations land with #33.
+
+The L2 spicedb_test brings up an ephemeral SpiceDB (rules_spicedb v0.2),
+imports schema.zed + test/seed.txt (caveats via zed-import syntax), and
+exercises every permission the schema exposes via the zed CLI.
+
+TS-side `:lib` ts_project ships the Zitadel JWT verify + SpiceDB helper
+surface (sub-claim of #33; full L3 itest ACs remain on the parent).
+Lands as part of the bootstrap-split that unblocks #79.
+"""
+
+load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
+load("@aspect_rules_jest//jest:defs.bzl", "jest_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config", "ts_project")
+load("@rules_go//go:def.bzl", "go_library")
+load("@rules_spicedb//:defs.bzl", "spicedb_relationships", "spicedb_schema", "spicedb_test")
+
+# ── TypeScript ──────────────────────────────────────────────────────────
+
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    deps = ["//:tsconfig"],
+)
+
+ts_project(
+    name = "lib",
+    srcs = glob(
+        ["src/**/*.ts"],
+        exclude = ["src/**/*.test.ts"],
+    ),
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//:node_modules/@authzed/authzed-node",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/@types/node",
+        "//:node_modules/jose",
+        "//:node_modules/pg",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+)
+
+# Compiled test sources — kept separate from :lib so production builds
+# don't pull in @jest/globals transitively.
+ts_project(
+    name = "lib_test",
+    srcs = glob(["src/**/*.test.ts"]),
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        ":lib",
+        "//:node_modules/@authzed/authzed-node",
+        "//:node_modules/@jest/globals",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/@types/jest",
+        "//:node_modules/@types/node",
+        "//:node_modules/jest",
+        "//:node_modules/pg",
+    ],
+)
+
+# L1 unit test for spicedb.ts helpers. Pure DI via `_setClient_TESTING(...)`;
+# no jest.mock("@authzed/authzed-node") (avoids the jest-runtime
+# resetModules API mismatch documented in packages/db).
+jest_test(
+    name = "spicedb_unit_test",
+    config = ":jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@authzed/authzed-node",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/babel-jest",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)
+
+# L1 unit test for middleware.ts (#89). Pure DI via the three test
+# seams (_setVerifier_TESTING, _setPoolFactory_TESTING,
+# _setClient_TESTING). Exercises authedProcedure, tenantProcedure,
+# and requirePermission.
+jest_test(
+    name = "middleware_unit_test",
+    config = ":jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@authzed/authzed-node",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/@trpc/server",
+        "//:node_modules/babel-jest",
+        "//:node_modules/pg",
+        "//packages/db:lib",
+        "//packages/trpc:lib",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)
+
+# L1 unit test for zitadel.ts hasMFA helper (#169). Pure — no jose
+# / network. Full verifyToken coverage requires real JWKS; the
+# shape-extraction logic gets indirect coverage via the L3 itest
+# from #170.
+jest_test(
+    name = "zitadel_unit_test",
+    config = ":jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/babel-jest",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)
+
+copy_to_bin(
+    name = "jest_config",
+    srcs = ["jest.config.js"],
+)
+
+# ── Go ──────────────────────────────────────────────────────────────────
+
+# Go helper library. Single source file in packages/auth/go/ today
+# (package auth). The deeper packages/auth/go/spicedb/ sub-package has
+# its own go_library — kept separate to keep the spicedb-specific helper
+# surface importable on its own.
+go_library(
+    name = "auth",
+    srcs = ["go/spicedb.go"],
+    importpath = "github.com/monok8s/monok8s/packages/auth/go",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_authzed_authzed_go//proto/authzed/api/v1:api",
+        "@com_github_authzed_authzed_go//v1:authzed-go",
+        "@com_github_authzed_grpcutil//:grpcutil",
+    ],
+)
+
+# Canonical schema target — consumed by the L2 test here and by the
+# install-time bootstrap Job once #98 lands.
+spicedb_schema(
+    name = "schema",
+    srcs = ["schema.zed"],
+    visibility = ["//visibility:public"],
+)
+
+spicedb_relationships(
+    name = "seed",
+    srcs = ["//packages/auth/test:seed.txt"],
+    schema = ":schema",
+)
+
+spicedb_test(
+    name = "permissions_test",
+    srcs = ["//packages/auth/test:permissions_test.sh"],
+    relationships = ":seed",
+    schema = ":schema",
+    tags = ["impure"],
+)

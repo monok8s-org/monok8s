@@ -1,0 +1,135 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: tenant-azure
+  labels:
+    monok8s.io/composition: tenant-azure
+    monok8s.io/provider: azure
+spec:
+  compositeTypeRef:
+    apiVersion: monok8s.io/v1alpha1
+    kind: XTenant
+  resources:
+
+    # Capsule namespace tenancy (cloud-agnostic base)
+    - name: capsule-tenant
+      base:
+        apiVersion: capsule.clastix.io/v1beta2
+        kind: Tenant
+        spec:
+          owners:
+            - kind: ServiceAccount
+              name: crossplane-system
+          namespaceOptions:
+            quota: 3
+          resourceQuota:
+            - hard:
+                limits.cpu: "4"
+                limits.memory: 8Gi
+      patches:
+        - fromFieldPath: spec.tenantId
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "tenant-%s"
+
+    # Azure Storage container for tenant object storage
+    # Tagged with monok8s-managed=true — Event Grid write-back filter excludes
+    # role assignment changes on resources with this tag.
+    - name: tenant-storage-container
+      base:
+        apiVersion: storage.azure.upbound.io/v1beta1
+        kind: Container
+        spec:
+          forProvider:
+            storageAccountNameSelector:
+              matchLabels:
+                monok8s.io/purpose: tenant-storage
+            containerAccessType: private
+            metadata:
+              monok8s-managed: "true"
+              monok8s.io/resource-type: tenant
+      patches:
+        - fromFieldPath: spec.tenantId
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "tenant-%s"
+        - fromFieldPath: spec.tenantId
+          toFieldPath: spec.forProvider.metadata["monok8s.io/tenant-id"]
+        - fromFieldPath: spec.tenantId
+          toFieldPath: spec.forProvider.metadata["monok8s.io/resource-id"]
+
+    # Entra ID groups for each role — synced from Zitadel via SCIM.
+    # Group naming convention: monok8s-<tenant_id>-<role>
+    # App role assignment links the group to the monok8s Enterprise Application.
+    #
+    # Write-back filter excludes role assignments where the caller is the
+    # Crossplane managed identity, preventing the reconciliation loop.
+    - name: entra-group-admin
+      base:
+        apiVersion: groups.azuread.upbound.io/v1beta1
+        kind: Group
+        spec:
+          forProvider:
+            securityEnabled: true
+            assignableToRole: false
+      patches:
+        - fromFieldPath: spec.tenantId
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "monok8s-%s-admin"
+        - fromFieldPath: spec.tenantId
+          toFieldPath: spec.forProvider.displayName
+          transforms:
+            - type: string
+              string:
+                fmt: "monok8s-%s-admin"
+
+    - name: entra-group-member
+      base:
+        apiVersion: groups.azuread.upbound.io/v1beta1
+        kind: Group
+        spec:
+          forProvider:
+            securityEnabled: true
+            assignableToRole: false
+      patches:
+        - fromFieldPath: spec.tenantId
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "monok8s-%s-member"
+        - fromFieldPath: spec.tenantId
+          toFieldPath: spec.forProvider.displayName
+          transforms:
+            - type: string
+              string:
+                fmt: "monok8s-%s-member"
+
+    - name: entra-group-viewer
+      base:
+        apiVersion: groups.azuread.upbound.io/v1beta1
+        kind: Group
+        spec:
+          forProvider:
+            securityEnabled: true
+            assignableToRole: false
+      patches:
+        - fromFieldPath: spec.tenantId
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "monok8s-%s-viewer"
+        - fromFieldPath: spec.tenantId
+          toFieldPath: spec.forProvider.displayName
+          transforms:
+            - type: string
+              string:
+                fmt: "monok8s-%s-viewer"

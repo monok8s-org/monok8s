@@ -1,0 +1,37 @@
+# Common flags
+common --enable_bzlmod
+common --registry=https://bcr.bazel.build
+
+# Build flags
+build --incompatible_strict_action_env
+build --workspace_status_command=tools/scripts/workspace_status.sh
+
+# Test flags
+test --test_output=errors
+test --flaky_test_attempts=2
+
+# Exclude benchmarks from default `bazel test //...` runs (#166).
+# Bench targets are tagged `bench` (see packages/db/BUILD.bazel for
+# the first one). To run benchmarks, invoke with `--test_tag_filters=bench`
+# explicitly. Phase B follow-up Issue will add a scheduled GHA
+# workflow that does so + captures results.
+test --test_tag_filters=-bench
+
+# BuildBuddy remote cache + Build Event Service.
+# Opt-in via --config=remote so local dev defaults to no network calls;
+# CI passes --config=remote (or --config=ci, which composes :remote).
+#
+# API-key headers are passed inline from the CI command line so the
+# shell expands $BUILDBUDDY_API_KEY before bazel sees them. bazelrc
+# files do NOT perform $VAR substitution — writing
+# `--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}` here
+# sends the literal string `${BUILDBUDDY_API_KEY}` and BuildBuddy
+# rejects it as an Invalid API key.
+build:remote --remote_cache=grpcs://remote.buildbuddy.io
+build:remote --bes_backend=grpcs://remote.buildbuddy.io
+build:remote --bes_results_url=https://app.buildbuddy.io/invocation/
+
+# CI composes :remote and adds upload + role metadata.
+build:ci --config=remote
+build:ci --remote_upload_local_results
+build:ci --build_metadata=ROLE=CI

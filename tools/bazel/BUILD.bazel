@@ -1,0 +1,56 @@
+"""bzl_library exports so the macros under tools/bazel/ are loadable as
+//tools/bazel:<file>.bzl from any package across the repo.
+
+When adding a new .bzl file in this directory, add a matching bzl_library
+target here as part of the same change — see tools/bazel/CLAUDE.md.
+"""
+
+load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+
+bzl_library(
+    name = "atlas",
+    srcs = ["atlas.bzl"],
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    ["atlas_migrate_apply_run.sh.tmpl"],
+    visibility = ["//visibility:public"],
+)
+
+# ESM loader hook for `@monok8s/*` path-alias resolution at raw Node
+# runtime (closes Discussion #45 Gap 25 / #178). L2 itest drivers that
+# import from in-repo packages depend on this filegroup so the .mjs
+# files appear in the runfiles tree.
+filegroup(
+    name = "monok8s_esm_loader",
+    srcs = [
+        "monok8s-esm-loader.mjs",
+        "monok8s-esm-resolver.mjs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+bzl_library(
+    name = "itest",
+    srcs = ["itest.bzl"],
+    visibility = ["//visibility:public"],
+)
+
+bzl_library(
+    name = "oci",
+    srcs = ["oci.bzl"],
+    visibility = ["//visibility:public"],
+)
+
+bzl_library(
+    name = "solid",
+    srcs = ["solid.bzl"],
+    visibility = ["//visibility:public"],
+)
+
+bzl_library(
+    name = "temporal",
+    srcs = ["temporal.bzl"],
+    visibility = ["//visibility:public"],
+)

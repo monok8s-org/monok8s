@@ -1,0 +1,1 @@
+exports_files(["permissions_test.sh", "seed.txt"], visibility = ["//packages/auth:__pkg__"])

@@ -1,0 +1,47 @@
+"""Example: itest_suite bringing up pg + spicedb together.
+
+Runs as the canonical AC#4 verification target for #11.
+"""
+
+load("@rules_pg//:defs.bzl", "pg_server", "postgres_schema")
+load("@rules_spicedb//:defs.bzl", "spicedb_schema", "spicedb_server")
+load("//tools/bazel:itest.bzl", "itest_suite")
+
+postgres_schema(
+    name = "pg_schema",
+    srcs = ["schema.sql"],
+    # Pin to PG16: the project's MODULE.bazel use_repo's pg_16_linux_amd64 only,
+    # and rules_pg's default `pg_default` alias points at pg_14 whose system-mode
+    # toolchain glob fails on this host (no share/ dir in the upstream PG14 RPM).
+    binary = "@rules_pg//:pg_16",
+)
+
+pg_server(
+    name = "db",
+    schema = ":pg_schema",
+)
+
+spicedb_schema(
+    name = "spicedb_schema_def",
+    srcs = ["schema.zed"],
+)
+
+spicedb_server(
+    name = "authz",
+    schema = ":spicedb_schema_def",
+)
+
+sh_binary(
+    name = "smoke_bin",
+    srcs = ["smoke.sh"],
+    tags = ["manual"],
+)
+
+itest_suite(
+    name = "smoke",
+    servers = {
+        "pg": ":db",
+        "spicedb": ":authz",
+    },
+    test = ":smoke_bin",
+)

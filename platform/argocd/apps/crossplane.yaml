@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: crossplane
+  namespace: argocd
+  annotations:
+    # Wave 0: must precede every XR / XRD consumer (XRDs in
+    # infra/crossplane/ require Crossplane's meta-CRDs, which the
+    # controller installs at startup once this Deployment is up).
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: monok8s
+  source:
+    repoURL: https://github.com/monok8s-org/monok8s-dev
+    targetRevision: main
+    path: platform/crossplane
+    directory:
+      include: bootstrap.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crossplane-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # ServerSideApply needed: the rendered manifest is ~30KB; some
+      # ClusterRoles + the Deployment annotation set exceed kubectl's
+      # 256KB last-applied-annotation limit for client-side apply.
+      - ServerSideApply=true

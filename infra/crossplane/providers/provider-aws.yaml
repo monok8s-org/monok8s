@@ -1,0 +1,20 @@
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws
+spec:
+  package: xpkg.upbound.io/upbound/provider-aws:v0.47.0
+  controllerConfigRef:
+    name: provider-aws-config
+---
+apiVersion: pkg.crossplane.io/v1alpha1
+kind: ControllerConfig
+metadata:
+  name: provider-aws-config
+metadata:
+  annotations:
+    # IRSA role ARN is set by Terraform and injected here at apply time
+    # eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/monok8s-crossplane-irsa
+spec:
+  args:
+    - --debug

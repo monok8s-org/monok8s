@@ -1,0 +1,81 @@
+---
+# Vault PKI secrets engine — installation client certificates
+#
+# Each Model B install gets a short-lived client cert (24h TTL) signed by this CA.
+# The cert CN is "installation/<installation_id>" — the telemetry gateway validates
+# that the CN matches the installation ID in the URL path.
+#
+# cert-manager on Model B handles rotation via the Vault issuer before expiry.
+# The Vault role is scoped to only issue certs matching the CN pattern.
+#
+# Applied via: vault policy write + vault write sys/mounts + vault write pki/...
+# Managed as a VaultPKISecret CR by the Vault Secrets Operator.
+
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultPKISecret
+metadata:
+  name: installation-ca
+  namespace: monok8s-platform
+spec:
+  vaultAuthRef: vault-auth-platform
+  mount: pki/installations          # isolated PKI mount for installation certs
+  role: installation-client
+  commonName: "monok8s installation CA"
+  issuerRef: root
+  destination:
+    name: installation-ca-cert      # K8s Secret: ca.crt used by telemetry-gateway
+    create: true
+---
+# Vault policy allowing the onboarding worker to issue installation certs
+# Applied via: vault policy write installation-issuer /platform/vault/pki/installations-policy.hcl
+#
+# installations-policy.hcl content:
+#
+#   path "pki/installations/issue/installation-client" {
+#     capabilities = ["create", "update"]
+#   }
+#   path "pki/installations/revoke" {
+#     capabilities = ["create", "update"]
+#   }
+#   path "pki/installations/crl/rotate" {
+#     capabilities = ["create", "update"]
+#   }
+#
+# Vault role parameters (applied once at bootstrap):
+#
+#   vault write pki/installations/roles/installation-client \
+#     allowed_domains="installation" \
+#     allow_subdomains=false \
+#     allow_bare_domains=false \
+#     allowed_uri_sans="" \
+#     allow_any_name=false \
+#     enforce_hostnames=false \
+#     require_cn=true \
+#     cn_validations="disabled" \
+#     allowed_other_sans="*" \
+#     max_ttl="25h" \
+#     ttl="24h" \
+#     key_type="ec" \
+#     key_bits=256 \
+#     ext_key_usage="ClientAuth" \
+#     no_store=false
+---
+# ExternalSecret: make the installation CA cert available to the telemetry-gateway
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: installation-ca
+  namespace: monok8s-platform
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-cluster-store
+    kind: ClusterSecretStore
+  target:
+    name: installation-ca-cert
+    creationPolicy: Owner
+  data:
+    - secretKey: ca.crt
+      remoteRef:
+        key: pki/installations/cert/ca_chain
+        property: certificate

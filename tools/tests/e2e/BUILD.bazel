@@ -1,0 +1,102 @@
+"""tools/tests/e2e — L4 milestone-gate tests (#37).
+
+Phase 1: the falsifiable hermeticity claim. kind cluster + ArgoCD
+bootstrap server-side-applied + workload-existence assertion across
+the 7 vendored ArgoCD workloads. Closes Discussion #4 Gap 3 — the
+substantive 0.1.0 release signal is that the vendored YAML at pinned
+tags is K8s-API-acceptable on a fresh apiserver.
+
+Phase 2 (deferred follow-up Issue): every workload reaches Ready
+(blocked on vanilla ArgoCD v3.3.8 redis secret-init reliability —
+operator-managed-secret territory), full demo-path test, Loki/Tempo
+trace assertions per the rest of #37's AC.
+"""
+
+load("@rules_go//go:def.bzl", "go_test")
+load("@rules_kind//:defs.bzl", "kind_cluster")
+load("//tools/bazel:itest.bzl", "itest_suite")
+
+# Long-running kind cluster. Brought up empty; the test driver applies
+# platform/argocd/bootstrap.yaml via `kubectl apply --server-side`.
+#
+# Why driver-side apply (not kind_cluster's `manifests=` attribute):
+# the vendored ArgoCD bootstrap includes the `applicationsets.argoproj.io`
+# CRD whose OpenAPI schema annotation exceeds K8s's 256KB metadata
+# annotation limit. Standard `kubectl apply` (client-side) fails on
+# this with "metadata.annotations: Too long" — a well-known ArgoCD
+# vendor issue (argoproj/argo-cd#9035) addressed by `kubectl apply
+# --server-side`, which doesn't write the last-applied-configuration
+# annotation. rules_kind's auto-apply path uses client-side apply;
+# moving the apply step into the driver lets us pass --server-side.
+#
+# k8s_version=1.29 matches the project's bare-metal target floor (per
+# docs/install/bare-metal.md "kubectl ≥ 1.29"). Bumping to 1.32+ is a
+# separate decision tracked when the bare-metal floor moves.
+kind_cluster(
+    name = "milestone_kind",
+    k8s_version = "1.29",
+    tags = [
+        # Kind clusters require docker on the host; impure per the
+        # established platform-test convention.
+        "impure",
+        # Manual: only invoked via the itest_suite wrapper below.
+        # Direct `bazel run //tools/tests/e2e:milestone_kind` would
+        # boot a cluster without the driver — useful only for
+        # ad-hoc operator debugging.
+        "manual",
+    ],
+)
+
+# Go test driver. Tagged `manual` because the itest_suite wrapper is
+# the public entry point — running the driver directly skips the
+# kind cluster orchestration.
+go_test(
+    name = "demo_path_driver",
+    srcs = ["demo_path_driver_test.go"],
+    data = [
+        # Driver applies the bootstrap manifest via server-side apply
+        # at test-start; needs the file in its runfiles.
+        "//platform/argocd:bootstrap.yaml",
+    ],
+    tags = [
+        # Driver requires KUBECONFIG + KUBECTL from itest_suite's
+        # rules_kind health check / env propagation (rules_kind writes
+        # the kubectl binary path into the cluster env file).
+        "impure",
+        "manual",
+    ],
+    deps = [
+        "@rules_go//go/runfiles",
+    ],
+)
+
+# Public target. Brings up kind via :milestone_kind, propagates
+# KUBECONFIG + KUBECTL to the test driver via itest_suite's canonical
+# env injection (rules_kind writes the kubectl binary path into the
+# cluster env file under the `KUBECTL` key), runs :demo_path_driver,
+# then tears down.
+#
+# Closes #37 Phase 1. Phase 2 (workload-Ready + full demo path +
+# Loki/Tempo) lands under a follow-up Issue.
+#
+# `manual` tag is deliberate: the milestone gate is an explicit
+# release-time ceremony, not a per-PR CI run. Local invocation:
+#   bazel test //tools/tests/e2e:demo_path
+# Release operator invokes this against a machine with Docker
+# available. Per the AC, the only host-binary requirement is Docker
+# (Hermeticity Gap 2, already accepted). The PR-checks CI runner
+# doesn't currently carry Docker; this test would fail there as an
+# environment limitation, not a code limitation. Tagging manual
+# excludes it from default `bazel test //...` runs while keeping it
+# directly invocable when the operator brings up the cluster.
+itest_suite(
+    name = "demo_path",
+    servers = {
+        "k8s": ":milestone_kind",
+    },
+    tags = [
+        "impure",
+        "manual",
+    ],
+    test = ":demo_path_driver",
+)

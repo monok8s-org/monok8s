@@ -1,0 +1,16 @@
+# Test fixture: a CNPG-flavored XTenantDatabase (compositionSelector
+# matches the tenant-database-cnpg Composition's monok8s.io/provider=cnpg
+# label).
+apiVersion: monok8s.io/v1alpha1
+kind: XTenantDatabase
+metadata:
+  name: acme-app
+spec:
+  tenantName: acme
+  engine: cnpg
+  storage: medium
+  postgresVersion: "16"
+  dbName: app
+  compositionSelector:
+    matchLabels:
+      monok8s.io/provider: cnpg

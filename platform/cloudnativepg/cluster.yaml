@@ -1,0 +1,87 @@
+---
+# Simplification note: CloudNativePG manages ALL Postgres instances in this stack
+# (app, SpiceDB, Temporal, Zitadel) using the same operator, operator, same backup
+# strategy, and same monitoring. One operational model instead of four.
+#
+# To add a new cluster, copy this file and change the name and parameters.
+# The Pooler, backup, and monitoring config is identical across all clusters.
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: monok8s-app
+  namespace: monok8s-platform
+spec:
+  instances: 3                        # primary + 2 replicas, automatic failover
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+
+  postgresql:
+    parameters:
+      max_connections: "500"
+      shared_buffers: "256MB"
+      effective_cache_size: "768MB"
+      wal_level: logical               # required for logical replication + CDC
+
+  bootstrap:
+    initdb:
+      database: monok8s
+      owner: monok8s
+      secret:
+        name: monok8s-app-superuser   # Vault → ESO
+
+  superuserSecret:
+    name: monok8s-app-superuser
+
+  backup:
+    retentionPolicy: "30d"
+    barmanObjectStore:
+      destinationPath: "s3://monok8s-pgbackups/app"
+      s3Credentials:
+        accessKeyId:
+          name: pg-backup-secrets
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: pg-backup-secrets
+          key: SECRET_ACCESS_KEY
+      wal:
+        compression: gzip             # WAL archiving = PITR included at no extra cost
+
+  monitoring:
+    enablePodMonitor: true            # auto-scrapes all pg_stat_* metrics
+
+---
+# Pooler replaces standalone PgBouncer — managed by the same operator
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: monok8s-app-rw
+  namespace: monok8s-platform
+spec:
+  cluster:
+    name: monok8s-app
+  type: rw                            # read-write pool (primary only)
+  instances: 2
+  pgbouncer:
+    poolMode: transaction             # required for SET LOCAL tenant isolation
+    parameters:
+      max_client_conn: "1000"
+      default_pool_size: "25"
+      server_reset_query: "DISCARD ALL"  # clear SET LOCAL on connection return
+
+---
+# Read-only pool for analytics and snapshot queries
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: monok8s-app-ro
+  namespace: monok8s-platform
+spec:
+  cluster:
+    name: monok8s-app
+  type: ro                            # read-only pool (replicas only)
+  instances: 2
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      max_client_conn: "500"
+      default_pool_size: "20"

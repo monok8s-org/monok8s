@@ -1,0 +1,74 @@
+# Custom OnboardTenant dashboard — AC#5 of #25.
+#
+# Tracks the demo path's headline workflow (#3 §The demo path):
+#   tRPC tenant.create -> Temporal OnboardTenant workflow -> XTenant
+#   reconciles -> tenant DB ready.
+#
+# Three panels: end-to-end duration histogram, success/failure ratio,
+# trace-link panel that pivots into a Tempo TraceQL query for any
+# tenant.create span.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-onboard-tenant
+  namespace: grafana
+  labels:
+    grafana_dashboard: "1"
+data:
+  onboard-tenant.json: |
+    {
+      "title": "OnboardTenant Workflow",
+      "schemaVersion": 39,
+      "version": 1,
+      "uid": "onboard-tenant",
+      "tags": ["temporal", "monok8s", "demo-path"],
+      "time": {"from": "now-6h", "to": "now"},
+      "panels": [
+        {
+          "id": 1,
+          "title": "End-to-end duration (p50/p95/p99)",
+          "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "mimir"},
+          "gridPos": {"x": 0, "y": 0, "w": 24, "h": 8},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(temporal_workflow_endtoend_latency_bucket{workflow_type=\"OnboardTenantWorkflow\"}[5m])) by (le))",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(temporal_workflow_endtoend_latency_bucket{workflow_type=\"OnboardTenantWorkflow\"}[5m])) by (le))",
+              "legendFormat": "p95"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(temporal_workflow_endtoend_latency_bucket{workflow_type=\"OnboardTenantWorkflow\"}[5m])) by (le))",
+              "legendFormat": "p99"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Success / failure ratio",
+          "type": "stat",
+          "datasource": {"type": "prometheus", "uid": "mimir"},
+          "gridPos": {"x": 0, "y": 8, "w": 12, "h": 6},
+          "targets": [{
+            "expr": "sum(rate(temporal_workflow_completed_total{workflow_type=\"OnboardTenantWorkflow\"}[5m])) / sum(rate(temporal_workflow_started_total{workflow_type=\"OnboardTenantWorkflow\"}[5m]))",
+            "instant": true
+          }]
+        },
+        {
+          "id": 3,
+          "title": "Recent OnboardTenant traces",
+          "type": "traces",
+          "datasource": {"type": "tempo", "uid": "tempo"},
+          "gridPos": {"x": 12, "y": 8, "w": 12, "h": 6},
+          "targets": [{
+            "queryType": "traceqlSearch",
+            "filters": [
+              {"id": "service-name", "tag": "service.name", "operator": "=", "value": "monok8s-api"},
+              {"id": "span-name", "tag": "name", "operator": "=", "value": "tenant.create"}
+            ]
+          }]
+        }
+      ]
+    }

@@ -1,0 +1,10 @@
+# Test fixture: a valid XTenant per the schema in xrds/xtenant.yaml.
+# Used by the L2 envtest to assert the XRD's OpenAPIV3Schema accepts the
+# minimum required spec shape.
+apiVersion: monok8s.io/v1alpha1
+kind: XTenant
+metadata:
+  name: acme
+spec:
+  name: acme
+  postgresVersion: "16"

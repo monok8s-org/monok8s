@@ -1,0 +1,73 @@
+"""packages/flagd — OpenFeature feature-flag client (#35).
+
+0.1.0 ships a no-op provider stub; 0.2.0 will swap in a real flagd
+binding. Mirrors packages/observability's BUILD shape — Bazel-
+consumed only (no workspace-symlinked `@monok8s/flagd` import path
+yet; the first runtime consumer will wire that as part of its own
+BUILD update).
+"""
+
+load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
+load("@aspect_rules_jest//jest:defs.bzl", "jest_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config", "ts_project")
+
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    deps = ["//:tsconfig"],
+)
+
+ts_project(
+    name = "lib",
+    srcs = glob(
+        ["src/**/*.ts"],
+        exclude = ["src/**/*.test.ts"],
+    ),
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//:node_modules/@types/node",
+    ],
+)
+
+ts_project(
+    name = "lib_test",
+    srcs = glob(["src/**/*.test.ts"]),
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        ":lib",
+        "//:node_modules/@jest/globals",
+        "//:node_modules/@types/jest",
+        "//:node_modules/@types/node",
+        "//:node_modules/jest",
+    ],
+)
+
+copy_to_bin(
+    name = "jest_config",
+    srcs = ["jest.config.js"],
+)
+
+# L1 unit tests for the no-op stub's contract. Pinned so the 0.2.0
+# real-flagd swap diffs cleanly.
+jest_test(
+    name = "stub_unit_test",
+    config = ":jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/babel-jest",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["pure"],
+)

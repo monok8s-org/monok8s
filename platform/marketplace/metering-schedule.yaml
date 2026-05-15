@@ -1,0 +1,28 @@
+# Temporal Schedule: hourly marketplace metering
+#
+# Submits usage records to all three cloud marketplaces every hour.
+# Records are idempotent — if the workflow runs twice for the same hour,
+# the cloud APIs deduplicate on the idempotency key.
+#
+# Applied via: kubectl apply -f platform/marketplace/metering-schedule.yaml
+
+---
+apiVersion: temporal.io/v1alpha1
+kind: Schedule
+metadata:
+  name: marketplace-metering
+  namespace: temporal
+spec:
+  scheduleId: marketplace-metering-hourly
+  spec:
+    cronExpressions:
+      - "0 * * * *"   # top of every hour
+  action:
+    startWorkflow:
+      workflowType: MeteringWorkflow
+      taskQueue: billing
+      workflowExecutionTimeout: "30m"
+      workflowRunTimeout: "30m"
+  policies:
+    overlapPolicy: SCHEDULE_OVERLAP_POLICY_SKIP   # skip if previous run is still going
+    catchupWindow: "1h"                           # at most 1 missed run on startup

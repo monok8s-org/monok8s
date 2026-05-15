@@ -1,0 +1,12 @@
+# Crossplane Composition Function: function-patch-and-transform.
+# Pinned to crossplane-contrib's published function package; pulled
+# by `crank render` via Docker per the rules_crossplane contract.
+# Cluster-side install of this Function happens at platform bootstrap
+# (#16, ArgoCD self-bootstrap); here we just declare the package the
+# Composition's pipeline step references.
+apiVersion: pkg.crossplane.io/v1
+kind: Function
+metadata:
+  name: function-patch-and-transform
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/function-patch-and-transform:v0.7.0

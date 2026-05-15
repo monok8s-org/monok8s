@@ -1,0 +1,50 @@
+# bazel-build-image — runs `bazel build` against an `oci_image` target
+# (or its `_tarball` variant) and emits the built image's digest as a
+# Task result. The downstream `cosign-sign` + `oci-push` Tasks consume
+# the digest.
+#
+# Generic per AC#3 — the `image-target` param drives which service is
+# built. tools/bazel/oci.bzl's `app_image` macro (#10) emits the
+# `oci_image` rules this Task expects.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: bazel-build-image
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: image-target
+      type: string
+      description: Bazel label of the oci_image target (e.g. //apps/api:image).
+  workspaces:
+    - name: source
+      description: Repo workspace.
+    - name: bazel-cache
+      description: Persistent Bazel disk cache.
+      optional: true
+  results:
+    - name: image-digest
+      description: sha256 digest of the built image.
+    - name: image-tag
+      description: Symbolic tag the image was built with (typically the git commit).
+  steps:
+    - name: build
+      image: gcr.io/cloud-builders/bazel:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/usr/bin/env sh
+        set -eu
+        bazel build --config=ci $(params.image-target)
+        # rules_oci writes a metadata file alongside the image's
+        # tarball; extract the digest from it. Path convention:
+        # bazel-bin/<package>/<name>/index.json
+        target=$(params.image-target)
+        # Convert //apps/api:image -> apps/api/image
+        rel=$(echo "$target" | sed -e 's|^//||' -e 's|:|/|')
+        digest=$(jq -r '.manifests[0].digest' "bazel-bin/$rel/index.json")
+        printf '%s' "$digest" | tee "$(results.image-digest.path)"
+        # Tag derived from STABLE_GIT_COMMIT in workspace_status.sh
+        # — falls back to "untagged" if the stamping isn't enabled.
+        tag=$(grep STABLE_GIT_COMMIT bazel-out/volatile-status.txt 2>/dev/null \
+              | awk '{print $2}' || echo untagged)
+        printf '%s' "$tag" | tee "$(results.image-tag.path)"

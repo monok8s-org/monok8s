@@ -1,0 +1,84 @@
+# mint-tenant-vault-key — Argo Workflow step that mints a per-tenant
+# Vault transit key (#83). Submitted by the Temporal tenant-create
+# workflow (Tier-2 #84) per Discussion #76's design ("Argo Workflows
+# as Temporal's cluster-mutation sub-step orchestrator"). Lands here
+# as a manifest-only artifact alongside `apply-tenant-migrations.yaml`
+# (#86); the Argo Workflows operator install is tracked at Issue #120.
+#
+# Key shape: `transit/keys/tenant-<tid>`, type aes256-gcm96,
+# `convergent_encryption=true` + `derived=true` so the same plaintext
+# under the same key version produces the same ciphertext (required
+# for deterministic indexes on encrypted columns — see
+# packages/db/CLAUDE.md §PII and encryption). Crypto-shred via key
+# deletion (`vault delete transit/keys/tenant-<tid>` after setting
+# `deletion_allowed=true` on the key's config) is the right-to-be-
+# forgotten mechanism.
+#
+# RBAC: the workflow's ServiceAccount must be bound to a Vault role
+# granting `create` + `update` on `transit/keys/tenant-<tid>`. The
+# per-tenant `vault-role` AuthBackendRole created by the
+# tenant-namespace Composition includes the `tenant-<tid>-transit`
+# policy in its tokenPolicies list (see infra/crossplane/compositions/
+# tenant-namespace/composition.yaml). For the cluster-wide Vault
+# token-injection path, the workflow uses the standard Vault-Agent
+# sidecar pattern; the agent reads /var/run/secrets/kubernetes.io/
+# serviceaccount/token and exchanges it for a Vault token.
+#
+# NATS publish on exit (both success + failure) surfaces step status
+# on `workflow.tenant.<tid>.mint-vault-key` for the UI / CLI live-tail
+# subscription (Tier-2 #88 wires the SSE channel that consumes these).
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: mint-tenant-vault-key
+  labels:
+    monok8s.io/component: tenant-vault-key
+spec:
+  entrypoint: mint
+  arguments:
+    parameters:
+      - name: tenantId
+        description: Tenant slug — the key path is `transit/keys/tenant-<tenantId>`.
+  templates:
+    - name: mint
+      inputs:
+        parameters:
+          - name: tenantId
+      onExit: publish-status
+      container:
+        image: hashicorp/vault:1.18
+        command:
+          - sh
+          - -c
+          - >
+            vault write
+            "transit/keys/tenant-{{inputs.parameters.tenantId}}"
+            type=aes256-gcm96
+            convergent_encryption=true
+            derived=true
+        env:
+          - name: VAULT_ADDR
+            value: http://vault.vault.svc.cluster.local:8200
+          # VAULT_TOKEN is injected by the Vault Agent sidecar via the
+          # Kubernetes auth backend (the workflow's ServiceAccount
+          # binds to the per-tenant vault-role created by the
+          # tenant-namespace Composition).
+    - name: publish-status
+      inputs:
+        parameters:
+          - name: tenantId
+            value: "{{workflow.parameters.tenantId}}"
+          - name: status
+            value: "{{workflow.status}}"
+      container:
+        image: natsio/nats-box:latest
+        command:
+          - sh
+          - -c
+          - >
+            nats pub
+            "workflow.tenant.{{inputs.parameters.tenantId}}.mint-vault-key"
+            "{{inputs.parameters.status}}"
+        env:
+          - name: NATS_URL
+            value: nats://nats.nats.svc.cluster.local:4222

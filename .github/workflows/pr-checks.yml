@@ -1,0 +1,49 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+
+# `bazel test //...` is the entire test surface per CLAUDE.md ## Overrides
+# §Bazel-only test surface. No `go test`, no `pnpm test`, no direct `tsc` —
+# Bazel's ts_project / *_test rules are the only contract this workflow runs.
+# Production image builds happen in Tekton (in-cluster), never here, per
+# the build/CI ownership boundaries in CLAUDE.md.
+
+jobs:
+  bazel-test:
+    name: bazel test //... --config=remote
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bazel via bazelisk
+        uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      - name: bazel test //...
+        # Headers are passed inline so the shell expands $BUILDBUDDY_API_KEY
+        # before bazel sees them — bazelrc files don't expand $VAR syntax,
+        # which is why prior runs sent the literal `${BUILDBUDDY_API_KEY}`
+        # as the header value and BuildBuddy rejected it.
+        #
+        # Wrapped in tools/scripts/mask_bep_exit38.sh so the workflow
+        # passes when every test passes but the BuildBuddy BEP upload
+        # step exits 38 — which is the steady state for this repo
+        # since BUILDBUDDY_API_KEY isn't configured (project decision).
+        # Same shape bench.yml routes around with its `if: always()`
+        # regression-check step; pr-checks.yml has no follow-on step
+        # so the mask is the equivalent guardrail. Behavior tested via
+        # //tools/scripts:mask_bep_exit38_test (sh_test, 7 cases).
+        run: |
+          bash tools/scripts/mask_bep_exit38.sh \
+            bazel test //... \
+              --config=remote \
+              --remote_upload_local_results \
+              --remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY \
+              --bes_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}

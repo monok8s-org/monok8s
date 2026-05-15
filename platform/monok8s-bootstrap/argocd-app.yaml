@@ -1,0 +1,36 @@
+# ArgoCD Application that syncs the monok8s-bootstrap install Job.
+#
+# Sync ordering: this Application has `sync-wave: "10"` so it lands
+# AFTER Zitadel (`platform/zitadel/`, wave 0-4), Temporal, SpiceDB,
+# Crossplane, etc. The bootstrap Job inside this manifest set has its
+# own sync-wave: "5" annotation on the Job to ensure the SA + RBAC
+# (lower-wave manifests in this same Application) are applied first.
+#
+# Mirrors the shape of platform/argo-workflows/argocd-app.yaml.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monok8s-bootstrap
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/monok8s-org/monok8s-dev
+    targetRevision: main
+    path: platform/monok8s-bootstrap
+    directory:
+      recurse: false
+      include: '{bootstrap-job.yaml,rbac.yaml}'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: install
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

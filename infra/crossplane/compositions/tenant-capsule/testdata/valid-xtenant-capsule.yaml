@@ -1,0 +1,12 @@
+# Test fixture: a Capsule-flavored XTenant (compositionSelector matches
+# the tenant-capsule Composition's monok8s.io/provider=capsule label).
+apiVersion: monok8s.io/v1alpha1
+kind: XTenant
+metadata:
+  name: acme
+spec:
+  name: acme
+  postgresVersion: "16"
+  compositionSelector:
+    matchLabels:
+      monok8s.io/provider: capsule

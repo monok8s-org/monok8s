@@ -1,0 +1,139 @@
+# api-build — the first end-to-end production CI pipeline (#28).
+#
+# Composes the 6 reusable Tasks from #26 into the canonical chain:
+#   clone -> bazel-test -> bazel-build-image -> oci-push -> cosign-sign
+#                                                       -> gitops-update
+#
+# Per Discussion #3 §Per-layer scope: "Run manually for 0.1.0; webhook
+# trigger deferred". Tekton Triggers (TriggerTemplate / EventListener
+# for tag pushes matching `apps/api/v*` per AC#2) lands in 0.2.0
+# alongside the Triggers install. For 0.1.0, this Pipeline is invoked
+# manually via `kubectl create -f pipelinerun.yaml` (operator runs the
+# milestone-gate smoke against staging via #37 L4).
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: apps-api-build
+  namespace: tekton-pipelines
+  labels:
+    monok8s.io/pipeline: apps-api-build
+    monok8s.io/service: api
+spec:
+  description: |
+    Build, sign, push, and gitops-update the apps/api OCI image.
+    Triggered manually for 0.1.0; webhook-driven via Tekton Triggers
+    for 0.2.0+.
+
+  params:
+    - name: revision
+      type: string
+      description: Git ref to build from (commit, tag, or branch).
+      default: main
+    - name: gitops-branch
+      type: string
+      description: Branch in the gitops repo to commit the digest update to.
+      default: main
+
+  workspaces:
+    - name: source
+      description: Cloned source — `clone` writes here; downstream Tasks read.
+    - name: gitops
+      description: Cloned gitops repo for the digest-update commit.
+    - name: bazel-cache
+      description: Persistent Bazel disk cache (PVC) shared across PipelineRuns.
+      optional: true
+
+  tasks:
+    # 1. Clone the monok8s-dev repo at the requested revision.
+    - name: clone
+      taskRef:
+        name: clone
+      params:
+        - name: url
+          value: https://github.com/monok8s-org/monok8s-dev.git
+        - name: revision
+          value: $(params.revision)
+        - name: depth
+          value: "50"
+      workspaces:
+        - name: output
+          workspace: source
+
+    # 2. bazel test //... — gate on the project test surface.
+    - name: test
+      taskRef:
+        name: bazel-test
+      runAfter: [clone]
+      params:
+        - name: targets
+          value: "//..."
+      workspaces:
+        - name: source
+          workspace: source
+        - name: bazel-cache
+          workspace: bazel-cache
+
+    # 3. Build the apps/api OCI image via tools/bazel/oci.bzl's
+    #    app_image macro (#10).
+    - name: build-image
+      taskRef:
+        name: bazel-build-image
+      runAfter: [test]
+      params:
+        - name: image-target
+          value: "//apps/api:image"
+      workspaces:
+        - name: source
+          workspace: source
+        - name: bazel-cache
+          workspace: bazel-cache
+
+    # 4. Push the built tarball to Harbor. The `clone` Task's commit
+    #    result drives the immutable image tag; `bazel-build-image`'s
+    #    digest result drives downstream signing + gitops update.
+    - name: push
+      taskRef:
+        name: oci-push
+      runAfter: [build-image]
+      params:
+        - name: image-tarball
+          value: "bazel-bin/apps/api/image/tarball.tar"
+        - name: destination
+          value: "harbor.monok8s.internal/monok8s/api:$(tasks.clone.results.commit)"
+      workspaces:
+        - name: source
+          workspace: source
+
+    # 5. Sign the pushed image with cosign + the keyless OIDC flow.
+    #    Reference is digest-pinned per AC#3 — sigstore stores the
+    #    signature against the immutable digest, not the tag.
+    - name: sign
+      taskRef:
+        name: cosign-sign
+      runAfter: [push]
+      params:
+        - name: image-ref
+          value: "harbor.monok8s.internal/monok8s/api@$(tasks.push.results.pushed-digest)"
+
+    # 6. Patch the staging overlay's kustomization with the new digest.
+    #    ArgoCD picks up the change on next sync.
+    - name: gitops-update
+      taskRef:
+        name: gitops-update
+      runAfter: [sign]
+      params:
+        - name: gitops-repo
+          value: https://github.com/monok8s-org/monok8s-dev.git
+        - name: file-path
+          value: apps/api/k8s/overlays/staging/kustomization.yaml
+        - name: image-name
+          value: harbor.monok8s.internal/monok8s/api
+        - name: new-digest
+          value: $(tasks.push.results.pushed-digest)
+        - name: branch
+          value: $(params.gitops-branch)
+        - name: commit-message
+          value: "chore(apps/api): bump staging digest from Tekton apps-api-build pipeline"
+      workspaces:
+        - name: gitops
+          workspace: gitops

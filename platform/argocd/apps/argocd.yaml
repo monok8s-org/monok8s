@@ -1,0 +1,29 @@
+# Self-managed Argo CD — its own Application points back at the same
+# bootstrap source the platform was installed from. Future updates to
+# bootstrap.yaml + a `git push` propagate via Argo CD's reconciliation.
+# AC#3 of #16: ArgoCD's own Application points back at the bootstrap
+# source — self-managed.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+spec:
+  project: monok8s
+  source:
+    repoURL: https://github.com/monok8s-org/monok8s-dev
+    targetRevision: main
+    path: platform/argocd
+    directory:
+      include: bootstrap.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: false      # never prune Argo CD itself — disaster recovery requires manual delete
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - Replace=true    # Argo CD's CRDs are too large for client-side apply

@@ -1,0 +1,7 @@
+exports_files(
+    [
+        "smoke.sh",
+        "permissions_test.sh",
+    ],
+    visibility = ["//platform/spicedb:__pkg__"],
+)

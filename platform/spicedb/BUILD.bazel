@@ -1,0 +1,58 @@
+"""SpiceDB platform install + L2 permission round-trip (#23).
+
+Two layers of test:
+  • spicedb_smoke (L1, pure) — asserts the install manifests + schema +
+    bootstrap-Job ConfigMap are structurally well-formed and the
+    schema content stays in sync between schema.zed and the embedded
+    ConfigMap copy.
+  • permissions_test (L2 via rules_spicedb) — brings up an ephemeral
+    SpiceDB, loads schema.zed + seed-test.txt, and exercises every
+    permission the schema exposes via zed CLI checks. Closes AC#4.
+"""
+
+load("@rules_spicedb//:defs.bzl", "spicedb_relationships", "spicedb_schema", "spicedb_test")
+
+exports_files(
+    [
+        "cluster.yaml",
+        "operator-bootstrap.yaml",
+        "schema-bootstrap-job.yaml",
+        "spicedbcluster.yaml",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Static-shape validator over the platform install manifests.
+sh_test(
+    name = "spicedb_smoke",
+    srcs = ["//platform/spicedb/testdata:smoke.sh"],
+    data = [
+        "cluster.yaml",
+        "operator-bootstrap.yaml",
+        "schema-bootstrap-job.yaml",
+        "schema.zed",
+        "spicedbcluster.yaml",
+    ],
+    tags = ["pure"],
+)
+
+# L2 hermetic test: ephemeral SpiceDB instance + schema.zed + seed
+# relationships + zed CLI permission checks.
+spicedb_schema(
+    name = "schema",
+    srcs = ["schema.zed"],
+)
+
+spicedb_relationships(
+    name = "seed_test",
+    srcs = ["policies/seed-test.txt"],
+    schema = ":schema",
+)
+
+spicedb_test(
+    name = "permissions_test",
+    srcs = ["//platform/spicedb/testdata:permissions_test.sh"],
+    relationships = ":seed_test",
+    schema = ":schema",
+    tags = ["impure"],
+)

@@ -1,0 +1,46 @@
+"""Argo Workflows operator install + WorkflowTemplate manifests.
+
+This package carries two sets of artifacts:
+
+  * The operator install bundle (`bootstrap.yaml`, #120) — vendored
+    upstream `install.yaml` reconciled into the cluster by the ArgoCD
+    Application at `platform/argocd/apps/argo-workflows.yaml`.
+  * WorkflowTemplate CR manifests submitted by Temporal workflows
+    per Discussion #76's design:
+      - `apply-tenant-migrations.yaml` (#86) — per-tenant Atlas
+        migration apply via the //packages/db:migrate-apply runner.
+      - `mint-tenant-vault-key.yaml` (#83) — per-tenant Vault
+        transit-key minting with convergent_encryption + derived.
+
+Both layers carry pure grep-based smoke tests; no cluster / no Docker
+required.
+"""
+
+exports_files(
+    [
+        "bootstrap.yaml",
+        "templates/apply-tenant-migrations.yaml",
+        "templates/mint-tenant-vault-key.yaml",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Operator install shape smoke (#120). Mirrors the
+# platform/cloudnativepg/cloudnativepg_smoke pattern.
+sh_test(
+    name = "bootstrap_smoke",
+    srcs = ["//platform/argo-workflows/testdata:bootstrap_smoke.sh"],
+    data = ["bootstrap.yaml"],
+    tags = ["pure"],
+)
+
+# WorkflowTemplate manifests shape smoke (#86, #83).
+sh_test(
+    name = "templates_smoke",
+    srcs = ["//platform/argo-workflows/testdata:smoke.sh"],
+    data = [
+        "templates/apply-tenant-migrations.yaml",
+        "templates/mint-tenant-vault-key.yaml",
+    ],
+    tags = ["pure"],
+)

@@ -1,0 +1,308 @@
+# tenant-gcp — GCP-specific overlay on the tenant-namespace trunk.
+#
+# In Crossplane v2 there's no native Composition inheritance, so the
+# canonical "thin overlay" pattern is: this Composition declares the
+# same trunk resources as tenant-namespace AND layers GCP-specific
+# resources on top. The XR picks tenant-gcp over tenant-namespace via
+# `compositionSelector.matchLabels: { monok8s.io/provider: gcp }`.
+#
+# When the GCP provider package is absent (bare-metal install, AWS
+# install, etc.), XRs simply don't match this Composition's selector
+# and fall through to tenant-namespace — which has the same trunk
+# resources but no GCP coupling. That's the "graceful on bare metal"
+# AC: there's no in-Composition fallback because the selection itself
+# is the fallback.
+#
+# GCP-specific layer is two resources:
+#   • iam.gcp.upbound.io ServiceAccount     — per-tenant Google SA
+#   • iam.gcp.upbound.io ServiceAccountIAMMember
+#                                            — bind the tenant's K8s SA
+#                                              to the Google SA via
+#                                              roles/iam.workloadIdentityUser
+# (storage.gcp.upbound.io Bucket is reserved for a follow-up overlay
+# that wires per-tenant object storage; out of scope for #15's KSA->
+# GCS Workload Identity AC.)
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: tenant-gcp
+  labels:
+    monok8s.io/composition: tenant-gcp
+    monok8s.io/provider: gcp
+spec:
+  compositeTypeRef:
+    apiVersion: monok8s.io/v1alpha1
+    kind: XTenant
+
+  mode: Pipeline
+
+  pipeline:
+    - step: patch-and-transform
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+          # =========================================================
+          # Trunk resources — identical to tenant-namespace.
+          # =========================================================
+
+          # 1. Capsule-labeled Namespace.
+          - name: namespace
+            base:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                labels:
+                  capsule.clastix.io/tenant: customer-tenants
+                  monok8s.io/managed-by: crossplane
+                  monok8s.io/provider: gcp
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: ToCompositeFieldPath
+                fromFieldPath: metadata.name
+                toFieldPath: status.namespace
+
+          # 2. CloudNativePG Cluster.
+          - name: postgres-cluster
+            base:
+              apiVersion: postgresql.cnpg.io/v1
+              kind: Cluster
+              spec:
+                instances: 1
+                storage:
+                  size: 1Gi
+                bootstrap:
+                  initdb:
+                    database: app
+                    owner: app
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "%s-db"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.namespace
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.postgresVersion
+                toFieldPath: spec.imageName
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "ghcr.io/cloudnative-pg/postgresql:%s"
+              - type: ToCompositeFieldPath
+                fromFieldPath: status.connectionInfo.host
+                toFieldPath: status.dbHost
+
+          # 3a. Vault Policy.
+          - name: vault-policy
+            base:
+              apiVersion: vault.crossplane.io/v1alpha1
+              kind: Policy
+              spec:
+                forProvider:
+                  policy: |
+                    path "secret/data/tenants/PLACEHOLDER/*" {
+                      capabilities = ["read"]
+                    }
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.policy
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: |
+                        path "secret/data/tenants/%s/*" {
+                          capabilities = ["read"]
+                        }
+
+          # 3b. Vault AuthBackendRole.
+          - name: vault-role
+            base:
+              apiVersion: vault.crossplane.io/v1alpha1
+              kind: AuthBackendRole
+              spec:
+                forProvider:
+                  backend: kubernetes
+                  tokenTtl: 3600
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.roleName
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.boundServiceAccountNamespaces[0]
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.tokenPolicies[0]
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+
+          # 4. ExternalSecret.
+          - name: db-creds
+            base:
+              apiVersion: external-secrets.io/v1beta1
+              kind: ExternalSecret
+              spec:
+                refreshInterval: 1h
+                secretStoreRef:
+                  name: vault-backend
+                  kind: ClusterSecretStore
+                target:
+                  name: db-credentials
+                  creationPolicy: Owner
+                data:
+                  - secretKey: password
+                    remoteRef:
+                      key: secret/data/tenants/PLACEHOLDER/db
+                      property: password
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.namespace
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.data[0].remoteRef.key
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "secret/data/tenants/%s/db"
+
+          # =========================================================
+          # GCP overlay: Workload Identity binding so the tenant's K8s
+          # ServiceAccount can authenticate as the per-tenant Google SA.
+          # The Google SA itself is granted GCS access by a sibling
+          # bucket-binding overlay (out of scope for #15).
+          # =========================================================
+
+          # 5. Per-tenant Google ServiceAccount.
+          - name: gcp-service-account
+            base:
+              apiVersion: iam.gcp.upbound.io/v1beta1
+              kind: ServiceAccount
+              spec:
+                forProvider:
+                  displayName: "monok8s tenant Google SA"
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s-gsa"
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.accountId
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s"
+
+          # 6. Workload Identity binding — bind the tenant's K8s
+          #    ServiceAccount (default/tenant-default) to the Google
+          #    SA above via roles/iam.workloadIdentityUser. Pods that
+          #    run as this KSA acquire GSA credentials transparently.
+          - name: gcp-workload-identity-binding
+            base:
+              apiVersion: iam.gcp.upbound.io/v1beta1
+              kind: ServiceAccountIAMMember
+              spec:
+                forProvider:
+                  role: roles/iam.workloadIdentityUser
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: metadata.name
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "tenant-%s-wi-binding"
+              # Reference the GCP SA via its full resource path. The
+              # placeholder PROJECT_ID is wired in by the project-
+              # bootstrap step (#5) when the GCP cluster comes up.
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.serviceAccountId
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "projects/PROJECT_ID/serviceAccounts/tenant-%s@PROJECT_ID.iam.gserviceaccount.com"
+              # Member: the K8s ServiceAccount in the tenant's namespace
+              # in WI member-string form.
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.name
+                toFieldPath: spec.forProvider.member
+                transforms:
+                  - type: string
+                    string:
+                      type: Format
+                      fmt: "serviceAccount:PROJECT_ID.svc.id.goog[tenant-%s/tenant-default]"

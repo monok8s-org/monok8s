@@ -1,0 +1,43 @@
+# cosign-sign — signs an image (by digest) with cosign + the keyless
+# OIDC flow. The Tekton ServiceAccount's projected identity token is
+# the OIDC subject; Sigstore's Fulcio issues the short-lived signing
+# cert. Signature lands in the Sigstore transparency log (Rekor).
+#
+# Generic per AC#3 — the `image-ref` is parameterized; consumers pass
+# the digest output from `bazel-build-image`.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: cosign-sign
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: image-ref
+      type: string
+      description: Full image reference WITH digest (e.g. harbor.monok8s.internal/monok8s/api@sha256:abc...).
+    - name: identity-token-audience
+      type: string
+      description: OIDC audience for the projected ServiceAccount token.
+      default: sigstore
+  steps:
+    - name: cosign-sign
+      image: ghcr.io/sigstore/cosign/cosign:v2.4.0
+      script: |
+        #!/usr/bin/env sh
+        set -eu
+        # Cosign reads the projected token from this path by convention.
+        export COSIGN_EXPERIMENTAL=1
+        cosign sign --yes \
+            --identity-token-file=/var/run/secrets/tokens/sigstore-token \
+            "$(params.image-ref)"
+      volumeMounts:
+        - name: sigstore-token
+          mountPath: /var/run/secrets/tokens
+  volumes:
+    - name: sigstore-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: sigstore-token
+              audience: $(params.identity-token-audience)
+              expirationSeconds: 3600

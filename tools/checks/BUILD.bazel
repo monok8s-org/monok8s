@@ -1,0 +1,25 @@
+"""tools/checks — repo-wide invariant checks runnable via `bazel test`.
+
+Each check is a shell script + sh_test pair. The check itself is
+extracted (vs. inline in a workflow) so the script's behavior is
+unit-testable under Bazel rather than only visible at CI-run time —
+same pattern as `tools/scripts/mask_bep_exit38.sh` (#253).
+"""
+
+sh_binary(
+    name = "platform_cloud_neutral",
+    srcs = ["platform_cloud_neutral.sh"],
+    visibility = ["//visibility:public"],
+)
+
+# Hermetic unit test — runs the scanner against 5 synthetic fixture
+# platform/ trees + a real-tree leak-free check (gated on
+# MONOK8S_REAL_PLATFORM env var so the test can run pure-hermetic
+# without a runfiles dependency on the live platform/ tree).
+sh_test(
+    name = "platform_cloud_neutral_test",
+    srcs = ["platform_cloud_neutral_test.sh"],
+    args = ["$(rootpath platform_cloud_neutral.sh)"],
+    data = ["platform_cloud_neutral.sh"],
+    tags = ["pure"],
+)

@@ -1,0 +1,13 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "cmd",
+    srcs = glob(["*.go"]),
+    importpath = "github.com/monok8s/monok8s/apps/cli/cmd",
+    visibility = ["//apps/cli:__subpackages__"],
+    deps = [
+        "//apps/cli/internal/client",
+        "//apps/cli/internal/output",
+        "@com_github_spf13_cobra//:cobra",
+    ],
+)

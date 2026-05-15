@@ -1,0 +1,10 @@
+exports_files(
+    [
+        "apiextensions.crossplane.io_compositeresourcedefinitions.yaml",
+        "apiextensions.crossplane.io_compositions.yaml",
+        "capsule.clastix.io_tenants.yaml",
+        "cilium.io_ciliumnetworkpolicies.yaml",
+        "postgresql.cnpg.io_clusters.yaml",
+    ],
+    visibility = ["//infra/crossplane:__subpackages__"],
+)

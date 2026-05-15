@@ -1,0 +1,68 @@
+# schema-bootstrap-job — applies platform/spicedb/schema.zed against
+# the SpiceDB instance on every Argo CD sync. The Job is idempotent
+# (`zed schema write` overwrites whatever schema is currently loaded;
+# downstream relationships are unaffected).
+#
+# The schema content is mounted from a ConfigMap (sibling YAML doc
+# below) to avoid baking it into a Deployment image. Argo CD's
+# annotations re-run the Job on every change to the ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spicedb-schema
+  namespace: spicedb
+data:
+  # Mirrors platform/spicedb/schema.zed — kept in sync via the schema
+  # smoke (//platform/spicedb:spicedb_smoke) which greps for the
+  # required definitions in BOTH files.
+  schema.zed: |
+    definition user {}
+
+    definition tenant {
+        relation member: user
+        relation write:  user
+        relation read:   user
+
+        permission can_read   = read + write
+        permission can_write  = write
+        permission can_member = member + write + read
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spicedb-schema-bootstrap
+  namespace: spicedb
+  annotations:
+    # Argo CD: re-run the Job whenever the schema ConfigMap or the
+    # SpiceDBCluster changes.
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: zed
+          image: authzed/zed:v0.30.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -euo pipefail
+              zed context set local spicedb.spicedb.svc.cluster.local:50051 \
+                  --insecure --token "$(cat /etc/spicedb/secrets/preshared_key)"
+              zed schema write /etc/spicedb/schema/schema.zed
+          volumeMounts:
+            - name: schema
+              mountPath: /etc/spicedb/schema
+            - name: secrets
+              mountPath: /etc/spicedb/secrets
+      volumes:
+        - name: schema
+          configMap:
+            name: spicedb-schema
+        - name: secrets
+          secret:
+            secretName: spicedb-secrets

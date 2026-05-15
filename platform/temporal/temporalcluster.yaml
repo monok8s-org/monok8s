@@ -1,0 +1,58 @@
+# TemporalCluster — temporal-operator reconciles this into the four
+# Temporal services (history, matching, frontend, worker) plus the
+# Web UI. All run as 1-replica Deployments backed by the per-Temporal
+# CloudNativePG cluster (cluster.yaml).
+#
+# Per AC#3: Postgres backend uses platform CloudNativePG (separate
+# database from SpiceDB's). The connection details below reference
+# the secret CNPG creates for the temporal user — CNPG's secret
+# naming convention is `<cluster>-app`: see `temporal-db-app`.
+apiVersion: temporal.io/v1beta1
+kind: TemporalCluster
+metadata:
+  name: temporal
+  namespace: temporal
+spec:
+  version: 1.27.0   # Temporal server version — bump alongside Temporal Helm releases
+  numHistoryShards: 4
+
+  # 1-replica per service for 0.1.0 demo (production = N>=3 + raft consensus).
+  services:
+    history:  { replicas: 1 }
+    matching: { replicas: 1 }
+    frontend: { replicas: 1 }
+    worker:   { replicas: 1 }
+
+  persistence:
+    defaultStore:
+      name: default
+      sql:
+        user: temporal
+        pluginName: postgres12
+        databaseName: temporal
+        connectAddr: temporal-db-rw.temporal.svc.cluster.local:5432
+        connectProtocol: tcp
+      passwordSecretRef:
+        name: temporal-db-app
+        key: password
+
+    visibilityStore:
+      name: visibility
+      sql:
+        user: temporal
+        pluginName: postgres12
+        databaseName: temporal_visibility
+        connectAddr: temporal-db-rw.temporal.svc.cluster.local:5432
+        connectProtocol: tcp
+      passwordSecretRef:
+        name: temporal-db-app
+        key: password
+
+  # Web UI — internal LB only for 0.1.0 (no public exposure until
+  # production-hardening milestone wires Zitadel auth in front).
+  ui:
+    enabled: true
+    version: 2.43.0
+    replicas: 1
+    service:
+      type: ClusterIP

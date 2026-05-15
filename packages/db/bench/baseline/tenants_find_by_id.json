@@ -1,0 +1,10 @@
+{
+  "$comment": "Phase B (#189) baseline derived from one nightly CI-runner observation (GHA workflow_dispatch 25837728749 on commit 41f0ac0). Measured tps=6569.2 latency=0.406ms; baseline set at ~50% of measured TPS + ~2x measured latency so the 2x regression threshold detects ~3x slowdowns while absorbing single-runner noise. Tighten incrementally as nightly history accumulates a real distribution.",
+  "tps": 3000.0,
+  "statements": [
+    {
+      "latency_ms": 1.0,
+      "query_fragment": "SELECT * FROM tenants WHERE id ="
+    }
+  ]
+}

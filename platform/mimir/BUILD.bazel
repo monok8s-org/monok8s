@@ -1,0 +1,8 @@
+"""mimir bootstrap shape smoke (#25)."""
+
+sh_test(
+    name = "mimir_smoke",
+    srcs = ["//platform/mimir/testdata:smoke.sh"],
+    data = ["bootstrap.yaml"],
+    tags = ["pure"],
+)

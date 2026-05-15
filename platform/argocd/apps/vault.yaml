@@ -1,0 +1,26 @@
+# Vault server (dev mode for 0.1.0 — see Hermeticity Discussion #4 Gap 5
+# for the production-hardening deferral). Bootstrap manifest at
+# platform/vault/bootstrap.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault
+  namespace: argocd
+spec:
+  project: monok8s
+  source:
+    repoURL: https://github.com/monok8s-org/monok8s-dev
+    targetRevision: main
+    path: platform/vault
+    directory:
+      include: bootstrap.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vault
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

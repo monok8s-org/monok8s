@@ -1,0 +1,13 @@
+# bare-metal / kind storage overlay. Inherits the base + the chart's
+# PVC defaults. No further patches needed — the bundled chart-render
+# already configures `persistence.persistentVolumeClaim.registry`
+# with the in-cluster default StorageClass.
+#
+# This overlay is the default for every cluster that does NOT have a
+# cloud object store available — primary ArgoCD Application points
+# here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base

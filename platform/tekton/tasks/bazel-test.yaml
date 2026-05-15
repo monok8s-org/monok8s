@@ -1,0 +1,42 @@
+# bazel-test — runs bazel test over a target pattern. Generic; the
+# pattern (`//...` for full repo or `//path/...` for incremental) is a
+# parameter. BuildBuddy remote cache is enabled via the `--config=ci`
+# block in .bazelrc which the .bazelrc-aware bazel image picks up.
+#
+# Per CLAUDE.md ## Overrides §Bazel-only test surface, this is the
+# project's sole production CI test path — no `pnpm test` / `go test`
+# / `pytest` Tasks defined alongside.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: bazel-test
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: targets
+      type: string
+      description: Bazel target pattern to test.
+      default: "//..."
+    - name: bazelisk-version
+      type: string
+      description: bazelisk version (controls Bazel via .bazelversion).
+      default: "1.20.0"
+  workspaces:
+    - name: source
+      description: Workspace containing a checked-out repo (output of `clone`).
+    - name: bazel-cache
+      description: Persistent Bazel disk cache mounted across runs.
+      optional: true
+  steps:
+    - name: bazel-test
+      image: gcr.io/cloud-builders/bazel:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/usr/bin/env sh
+        set -eu
+        # BuildBuddy API key flows in via the `bazel-build-secrets`
+        # ExternalSecret (provisioned by tenant-namespace's overlay
+        # in 0.2.0+; for 0.1.0 the demo runs against a key in the
+        # cluster's tekton-pipelines namespace).
+        export BUILDBUDDY_API_KEY="${BUILDBUDDY_API_KEY:-}"
+        bazel test --config=ci $(params.targets)

@@ -1,0 +1,113 @@
+"""Cloud-adapter storage axis (#80, #102) — TS + Go libraries + Go contract test.
+
+Go: real bare-metal MinIO impl (#102) wired into the canonical Adapter
+interface; cloud impls (aws/gcp/azure) stay stubs per #80. Contract test
+spawns gofakes3 in-process (hermetic L1, no host binaries).
+
+TS: real bare-metal MinIO impl via the `minio` npm package (#102); cloud
+impls stay stubs. Contract test is type-level conformance via
+ts_project's auto-generated typecheck. Runtime jest contract test
+lands once jest_test rule wiring is bootstrapped (filed as a follow-up
+sibling of #107).
+"""
+
+load("@aspect_rules_jest//jest:defs.bzl", "jest_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config", "ts_project")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# ── TypeScript ──────────────────────────────────────────────────────────
+
+# Per-package tsconfig that extends root + flips on `declaration: true`
+# so this package's lib produces .d.ts files (required so that lib_test
+# can `import { … } from "./baremetal"` and resolve types via lib's
+# declaration output). Keeping `declaration: true` per-package avoids
+# requiring every other ts_project in the monorepo to also flip it.
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    deps = ["//:tsconfig"],
+)
+
+ts_project(
+    name = "lib",
+    srcs = glob(
+        ["*.ts"],
+        exclude = ["*.test.ts"],
+    ),
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//:node_modules/@types/node",
+        "//:node_modules/minio",
+    ],
+)
+
+ts_project(
+    name = "lib_test",
+    srcs = glob(["*.test.ts"]),
+    declaration = True,
+    preserve_jsx = True,
+    transpiler = "tsc",
+    tsconfig = ":tsconfig",
+    deps = [
+        ":lib",
+        "//:node_modules/@jest/globals",
+        "//:node_modules/@types/jest",
+        "//:node_modules/@types/node",
+        "//:node_modules/jest",
+        "//:node_modules/minio",
+    ],
+)
+
+jest_test(
+    name = "contract_test",
+    config = "//:jest_config",
+    data = [
+        ":lib",
+        ":lib_test",
+        "//:babel_config",
+        "//:node_modules/@babel/core",
+        "//:node_modules/@babel/preset-env",
+        "//:node_modules/@babel/preset-typescript",
+        "//:node_modules/babel-jest",
+        "//:node_modules/babel-preset-solid",
+        "//:node_modules/jest-environment-jsdom",
+        "//:node_modules/minio",
+    ],
+    node_modules = "//:node_modules",
+    tags = ["impure"],
+)
+
+# ── Go ──────────────────────────────────────────────────────────────────
+
+go_library(
+    name = "storage",
+    srcs = [
+        "aws.go",
+        "azure.go",
+        "baremetal.go",
+        "gcp.go",
+        "interface.go",
+    ],
+    importpath = "github.com/monok8s/monok8s/packages/cloud-adapters/storage",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_minio_minio_go_v7//:minio-go",
+    ],
+)
+
+go_test(
+    name = "storage_test",
+    srcs = ["baremetal_test.go"],
+    embed = [":storage"],
+    tags = ["impure"],
+    deps = [
+        "@com_github_johannesboyne_gofakes3//:gofakes3",
+        "@com_github_johannesboyne_gofakes3//backend/s3mem",
+        "@com_github_minio_minio_go_v7//:minio-go",
+        "@com_github_minio_minio_go_v7//pkg/credentials",
+    ],
+)

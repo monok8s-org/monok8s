@@ -1,0 +1,13 @@
+"""NATS platform install — vendored chart shape smoke (#78)."""
+
+exports_files(
+    ["bootstrap.yaml"],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "nats_smoke",
+    srcs = ["//platform/nats/testdata:smoke.sh"],
+    data = ["bootstrap.yaml"],
+    tags = ["pure"],
+)

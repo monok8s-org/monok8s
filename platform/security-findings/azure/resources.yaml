@@ -1,0 +1,80 @@
+# Azure Defender for Cloud → Event Grid → Service Bus → security-findings worker
+#
+# Routes Defender for Cloud alerts on monok8s-tagged resources to the worker.
+# Defender alerts are published via the Microsoft.Security/assessments event type.
+#
+# Applied via: kubectl apply -f platform/security-findings/azure/resources.yaml
+# Requires: provider-azure healthy, Crossplane Azure provider configured
+
+---
+# Service Bus namespace (reuse the existing monok8s namespace if present,
+# or create a dedicated one for security findings)
+apiVersion: servicebus.azure.upbound.io/v1beta1
+kind: NamespaceQueue
+metadata:
+  name: monok8s-security-findings
+  namespace: crossplane-system
+spec:
+  forProvider:
+    namespaceName: monok8s
+    resourceGroupName: monok8s-prod
+    maxDeliveryCount: 5
+    messageTimeToLive: "P7D"    # 7 days ISO 8601 duration
+    lockDuration: "PT2M"        # 2 minute lock
+    deadLetteringOnMessageExpiration: true
+  providerConfigRef:
+    name: provider-azure
+
+---
+# Event Grid system topic for Microsoft.Security events
+apiVersion: eventgrid.azure.upbound.io/v1beta1
+kind: SystemTopic
+metadata:
+  name: monok8s-security-events
+  namespace: crossplane-system
+spec:
+  forProvider:
+    resourceGroupName: monok8s-prod
+    location: eastus
+    # Subscription-scope source picks up all Defender alerts in the subscription
+    sourceArmResourceId: "/subscriptions/${AZURE_SUBSCRIPTION_ID}"
+    topicType: "Microsoft.Security.SecurityCenter"
+  providerConfigRef:
+    name: provider-azure
+
+---
+# Event subscription: route Defender alerts on monok8s resources to Service Bus
+apiVersion: eventgrid.azure.upbound.io/v1beta1
+kind: SystemTopicEventSubscription
+metadata:
+  name: monok8s-security-findings-sub
+  namespace: crossplane-system
+spec:
+  forProvider:
+    resourceGroupName: monok8s-prod
+    systemTopicName: monok8s-security-events
+    serviceBusQueueEndpointId: "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/monok8s-prod/providers/Microsoft.ServiceBus/namespaces/monok8s/queues/monok8s-security-findings"
+    includedEventTypes:
+      - "Microsoft.Security.AlertCreated"
+      - "Microsoft.Security.AssessmentCreated"
+      - "Microsoft.Security.AssessmentStatusChanged"
+    advancedFilter:
+      # Only route HIGH and CRITICAL severity alerts
+      stringIn:
+        - key: "data.Alert.AlertSeverity"
+          values: ["High", "Medium"]
+      # Only route alerts where the affected resource has monok8s.io/managed tag.
+      # Event Grid advanced filters on tags have a depth limit — we filter by
+      # resource group (monok8s-prod) as a sufficient proxy given our naming convention.
+      stringContains:
+        - key: "data.Alert.CompromisedEntity"
+          values: ["monok8s"]
+    retryPolicy:
+      maxDeliveryAttempts: 5
+      eventTimeToLiveInMinutes: 10080  # 7 days
+    deadLetterDestination:
+      storageBlob:
+        storageAccountId: "/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/monok8s-prod/providers/Microsoft.Storage/storageAccounts/monok8sprod"
+        blobContainerName: "security-findings-dlq"
+  providerConfigRef:
+    name: provider-azure

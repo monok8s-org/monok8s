@@ -1,0 +1,22 @@
+---
+# SpiceDB exposes Prometheus metrics natively — no sidecar needed.
+# Same pattern as Temporal: ServiceMonitor + native /metrics.
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: spicedb
+  namespace: monok8s-platform
+spec:
+  namespaceSelector:
+    matchNames: [monok8s-platform]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spicedb
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      # spicedb_check_request_duration_seconds  ← p99 check latency alert
+      # spicedb_datastore_query_duration_seconds ← Postgres scaling signal
+      # spicedb_relationships_total              ← approach to CockroachDB migration

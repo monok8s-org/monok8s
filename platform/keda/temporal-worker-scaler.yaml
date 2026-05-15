@@ -1,0 +1,17 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: onboarding-worker-scaler
+  namespace: monok8s-prod
+spec:
+  scaleTargetRef:
+    name: onboarding-worker
+  minReplicaCount: 1
+  maxReplicaCount: 20
+  triggers:
+    - type: temporal
+      metadata:
+        endpoint: temporal.monok8s-platform.svc.cluster.local:7233
+        namespace: monok8s
+        taskQueue: onboarding
+        targetQueueSize: "5"        # scale up when queue depth exceeds 5

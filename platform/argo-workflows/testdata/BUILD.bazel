@@ -1,0 +1,7 @@
+exports_files(
+    [
+        "bootstrap_smoke.sh",
+        "smoke.sh",
+    ],
+    visibility = ["//platform/argo-workflows:__pkg__"],
+)

@@ -1,0 +1,4 @@
+exports_files(
+    ["kustomization.yaml"],
+    visibility = ["//platform/tekton:__pkg__"],
+)

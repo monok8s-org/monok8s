@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# gcloud-monok8s — gcloud plugin wrapper for the monok8s CLI
+#
+# gcloud discovers executables named gcloud-<name> in PATH and exposes them
+# as `gcloud monok8s <args>`. This script delegates to the monok8s binary
+# with gcloud credentials injected automatically.
+#
+# Install:
+#   cp apps/cli/extensions/gcloud/gcloud-monok8s /usr/local/bin/gcloud-monok8s
+#   chmod +x /usr/local/bin/gcloud-monok8s
+#
+# After install:
+#   gcloud monok8s tenant list
+#   gcloud monok8s role assign --tenant <id> --user alice@example.com --role admin
+#   gcloud monok8s drift check --all
+#
+# The script exports MONOK8S_CLOUD=gcp and MONOK8S_CLOUD_TOKEN (the active
+# gcloud access token) so the monok8s CLI can exchange it for a monok8s JWT
+# without prompting for credentials.
+
+set -euo pipefail
+
+# ── Require gcloud and monok8s to be in PATH ──────────────────────────────────
+if ! command -v gcloud &>/dev/null; then
+  echo "error: gcloud not found in PATH" >&2
+  exit 1
+fi
+
+if ! command -v monok8s &>/dev/null; then
+  echo "error: monok8s CLI not found in PATH" >&2
+  echo "Install from: https://github.com/monok8s/monok8s/releases" >&2
+  exit 1
+fi
+
+# ── Obtain the gcloud access token ───────────────────────────────────────────
+# gcloud may prompt for re-auth if the token is expired; that's intentional.
+GCLOUD_TOKEN="$(gcloud auth print-access-token --quiet 2>/dev/null)" || {
+  echo "error: could not obtain gcloud access token" >&2
+  echo "Run 'gcloud auth login' to authenticate" >&2
+  exit 1
+}
+
+# ── Delegate to monok8s CLI ───────────────────────────────────────────────────
+# Pass --cloud gcp so the CLI knows which exchange path to use.
+# The token is passed via env rather than a flag to avoid it appearing in
+# process listings.
+exec env \
+  MONOK8S_CLOUD="gcp" \
+  MONOK8S_CLOUD_TOKEN="$GCLOUD_TOKEN" \
+  monok8s --cloud gcp "$@"

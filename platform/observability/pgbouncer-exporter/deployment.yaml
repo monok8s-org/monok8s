@@ -1,0 +1,72 @@
+---
+# Simplification note: when CloudNativePG's Pooler resource matures to expose
+# native Prometheus metrics, this exporter becomes redundant. Check the
+# CloudNativePG release notes before upgrading — it may be removable.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgbouncer-exporter
+  namespace: monok8s-platform
+  labels:
+    app: pgbouncer-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pgbouncer-exporter
+  template:
+    metadata:
+      labels:
+        app: pgbouncer-exporter
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9127"
+    spec:
+      containers:
+        - name: pgbouncer-exporter
+          image: prometheuscommunity/pgbouncer-exporter:v0.7.0
+          ports:
+            - containerPort: 9127
+              name: metrics
+          env:
+            - name: PGBOUNCER_EXPORTER_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: pgbouncer-exporter-secrets
+                  key: dsn
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgbouncer-exporter
+  namespace: monok8s-platform
+  labels:
+    app: pgbouncer-exporter
+spec:
+  ports:
+    - name: metrics
+      port: 9127
+  selector:
+    app: pgbouncer-exporter
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: pgbouncer-exporter
+  namespace: monok8s-platform
+spec:
+  selector:
+    matchLabels:
+      app: pgbouncer-exporter
+  endpoints:
+    - port: metrics
+      interval: 30s

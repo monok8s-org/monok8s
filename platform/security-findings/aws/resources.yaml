@@ -1,0 +1,128 @@
+# AWS Security Hub → EventBridge → SQS → security-findings worker
+#
+# Routes Security Hub findings on monok8s-tagged resources to the worker.
+# The EventBridge rule filters to findings where the affected resource has
+# the monok8s.io/managed=true tag.
+#
+# Applied via: kubectl apply -f platform/security-findings/aws/resources.yaml
+# Requires: provider-aws healthy, Crossplane AWS provider configured
+
+---
+# SQS queue for security findings
+apiVersion: sqs.aws.upbound.io/v1beta1
+kind: Queue
+metadata:
+  name: monok8s-security-findings
+  namespace: crossplane-system
+spec:
+  forProvider:
+    region: us-east-1
+    name: monok8s-security-findings.fifo
+    fifoQueue: true
+    contentBasedDeduplication: true
+    messageRetentionSeconds: 604800  # 7 days
+    visibilityTimeoutSeconds: 120
+    redrivePolicy:
+      - deadLetterTargetArnSelector:
+          matchLabels:
+            monok8s.io/purpose: security-findings-dlq
+        maxReceiveCount: 5
+    tags:
+      monok8s.io/managed: "true"
+      monok8s.io/purpose: security-findings
+  providerConfigRef:
+    name: provider-aws
+
+---
+# Dead-letter queue
+apiVersion: sqs.aws.upbound.io/v1beta1
+kind: Queue
+metadata:
+  name: monok8s-security-findings-dlq
+  namespace: crossplane-system
+  labels:
+    monok8s.io/purpose: security-findings-dlq
+spec:
+  forProvider:
+    region: us-east-1
+    name: monok8s-security-findings-dlq.fifo
+    fifoQueue: true
+    messageRetentionSeconds: 1209600  # 14 days
+    tags:
+      monok8s.io/managed: "true"
+  providerConfigRef:
+    name: provider-aws
+
+---
+# EventBridge rule: Security Hub findings on monok8s resources
+# Matches FAILED compliance checks and HIGH/CRITICAL severity findings
+# where the resource has the monok8s.io/managed tag.
+apiVersion: cloudwatchevents.aws.upbound.io/v1beta1
+kind: Rule
+metadata:
+  name: monok8s-security-findings
+  namespace: crossplane-system
+spec:
+  forProvider:
+    region: us-east-1
+    name: monok8s-security-findings
+    description: "Route Security Hub findings on monok8s resources to the findings worker"
+    eventPattern: |
+      {
+        "source": ["aws.securityhub"],
+        "detail-type": ["Security Hub Findings - Imported", "Security Hub Findings - Custom Action"],
+        "detail": {
+          "findings": {
+            "RecordState": ["ACTIVE"],
+            "Severity": {
+              "Label": ["MEDIUM", "HIGH", "CRITICAL"]
+            },
+            "Resources": {
+              "Tags": {
+                "monok8s.io/managed": ["true"]
+              }
+            }
+          }
+        }
+      }
+    targets:
+      - id: security-findings-sqs
+        arnSelector:
+          matchLabels:
+            monok8s.io/purpose: security-findings
+        sqsParameters:
+          - messageGroupId: security-findings
+  providerConfigRef:
+    name: provider-aws
+
+---
+# IAM policy allowing EventBridge to send to the SQS queue
+# (applied as a queue policy via Crossplane)
+apiVersion: sqs.aws.upbound.io/v1beta1
+kind: QueuePolicy
+metadata:
+  name: monok8s-security-findings-policy
+  namespace: crossplane-system
+spec:
+  forProvider:
+    region: us-east-1
+    queueUrlSelector:
+      matchLabels:
+        monok8s.io/purpose: security-findings
+    policy: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [{
+          "Effect": "Allow",
+          "Principal": { "Service": "events.amazonaws.com" },
+          "Action": "sqs:SendMessage",
+          "Resource": "*",
+          "Condition": {
+            "ArnEquals": {
+              "aws:SourceArn": "arn:aws:events:us-east-1:*:rule/monok8s-security-findings"
+            }
+          }
+        }]
+      }
+  providerConfigRef:
+    name: provider-aws

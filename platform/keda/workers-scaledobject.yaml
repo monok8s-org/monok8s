@@ -1,0 +1,39 @@
+# ScaledObject for the apps/workers Temporal workers. Drives KEDA's
+# HPA off Temporal's task-queue depth — when 50+ workflows pile up on
+# the `onboarding` queue, KEDA scales the worker Deployment up; when
+# the queue drains, it scales back to minReplicaCount.
+#
+# Per AC#3 of #20: minReplicaCount=1, maxReplicaCount=10. minReplica=1
+# (not 0) per apps/workers/CLAUDE.md — cold start latency on queue
+# arrival is unacceptable.
+#
+# Trigger uses KEDA's temporal scaler. The queueName matches the worker
+# directory's task-queue convention (apps/workers/<name>/ → queue
+# "<name>"). The Temporal endpoint resolves to the in-cluster Temporal
+# install from #24.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: workers-onboarding
+  namespace: monok8s
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: workers-onboarding
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 15        # seconds — how often KEDA checks queue depth
+  cooldownPeriod: 300        # seconds — wait this long after queue drains before scaling down
+  triggers:
+    - type: temporal
+      metadata:
+        # In-cluster Temporal frontend (#24 install) over gRPC.
+        endpoint: temporal-frontend.temporal.svc.cluster.local:7233
+        namespace: monok8s
+        # The task queue this worker pulls from. Matches the directory
+        # name per apps/workers/CLAUDE.md.
+        queueName: onboarding
+        # Scale up when more than 5 unacked workflow tasks queued.
+        # Documented per AC#3 — `targetQueueSize` documented in #20.
+        targetQueueSize: "5"

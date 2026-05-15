@@ -1,0 +1,57 @@
+# clone — git clone into a workspace. Generic; no service-specific
+# logic per AC#3. Consumers compose this as the first step of any
+# CI pipeline that needs source.
+#
+# The workspace `output` is mounted writable; subsequent Tasks consume
+# it (e.g. bazel-test reads source from output, bazel-build-image
+# reads BUILD targets, etc.).
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: clone
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: url
+      type: string
+      description: Git repository URL (HTTPS form).
+    - name: revision
+      type: string
+      description: Branch / tag / commit to check out.
+      default: main
+    - name: depth
+      type: string
+      description: Shallow-clone depth. Set to 0 to disable shallow.
+      default: "50"
+    - name: submodules
+      type: string
+      description: Update submodules (true/false).
+      default: "false"
+  workspaces:
+    - name: output
+      description: The workspace where the repo lands.
+  results:
+    - name: commit
+      description: Resolved HEAD commit sha after clone.
+    - name: ref
+      description: Symbolic ref (branch or tag) the clone is on.
+  steps:
+    - name: clone
+      image: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/git-init:v0.40.2
+      script: |
+        #!/usr/bin/env sh
+        set -eu
+        cd "$(workspaces.output.path)"
+        /ko-app/git-init \
+            -url="$(params.url)" \
+            -revision="$(params.revision)" \
+            -refspec="" \
+            -path=. \
+            -submodules="$(params.submodules)" \
+            -depth="$(params.depth)" \
+            -sslVerify=true \
+            -sparseCheckoutDirectories=""
+        # Capture commit + ref as Tekton results for downstream Tasks.
+        cd "$(workspaces.output.path)"
+        git rev-parse HEAD | tr -d '\n' | tee "$(results.commit.path)"
+        git rev-parse --abbrev-ref HEAD | tr -d '\n' | tee "$(results.ref.path)"
